@@ -114,6 +114,16 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .dialog-list input { width: auto; }
 .found-count { color: var(--accent-2); font-size: 13px; font-weight: 600; margin-bottom: 10px; }
 
+.count-badge {
+  display: inline-block;
+  background: rgba(255,255,255,.12);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 11px;
+  margin-left: 4px;
+}
+.tab-toggle-btn.active .count-badge { background: rgba(0,0,0,.2); }
+
 .full-width { width: 100%; margin-top: 20px; }
 
 .toggle-row {

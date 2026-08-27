@@ -13,6 +13,7 @@ const { TelegramClient } = require('teleproto');
 const { StringSession } = require('teleproto/sessions');
 const { Api } = require('teleproto');
 const { computeCheck } = require('teleproto/Password');
+const { NewMessage } = require('teleproto/events');
 const { encrypt, decrypt } = require('../crypto');
 const db = require('../db');
 
@@ -21,6 +22,10 @@ const API_HASH = process.env.TELEGRAM_API_HASH;
 
 // userId -> connected TelegramClient (kept warm so we don't reconnect on every action)
 const activeClients = new Map();
+
+// userIds that already have a "Cap List" incoming-message listener attached to
+// their client, so we never double-attach when getClient() is called again.
+const capListListenerAttached = new Set();
 
 // loginToken -> { client, phoneNumber, phoneCodeHash, userId, createdAt }
 const pendingLogins = new Map();
@@ -127,6 +132,7 @@ async function finishLogin(entry) {
   pendingLogins.delete(
     [...pendingLogins.entries()].find(([, v]) => v === entry)?.[0]
   );
+  attachCapListListener(entry.userId, entry.client);
 
   return { connected: true, displayName: [me.firstName, me.lastName].filter(Boolean).join(' ') };
 }
@@ -147,6 +153,7 @@ async function getClient(userId) {
   const client = newClient(decrypt(row.session_string));
   await client.connect();
   activeClients.set(userId, client);
+  attachCapListListener(userId, client);
   return client;
 }
 
@@ -390,6 +397,151 @@ async function deleteMessagesByDbIds(userId, dbIds) {
   return results;
 }
 
+// ---- Cap List: scan incoming group messages for truck-availability lines ----
+// Example lines dispatchers post in reply to a "share updated cap list" request:
+//   "LAS VEGAS NV Solo", "Chicago IL team", "CA team", "SC solo"
+
+const CAP_LIST_REQUEST_TEXT = 'Please share updated cap list  TEAM , SOLO';
+
+const US_STATE_CODES = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID', 'IL', 'IN', 'IA',
+  'KS', 'KY', 'LA', 'ME', 'MD', 'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT',
+  'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
+]);
+
+function parseCapListLine(line) {
+  const trimmed = line.trim().replace(/[.;]+$/, '');
+  if (!trimmed || trimmed.length > 80) return null;
+
+  const m = trimmed.match(/^(?:(.+?)[,]?\s+)?([A-Za-z]{2})\s+(team|solo)\s*$/i);
+  if (!m) return null;
+
+  const state = m[2].toUpperCase();
+  if (!US_STATE_CODES.has(state)) return null;
+
+  const city = (m[1] || '').replace(/,\s*$/, '').trim();
+  const truckType = m[3].toLowerCase();
+  return { city, state, truckType };
+}
+
+function attachCapListListener(userId, client) {
+  if (capListListenerAttached.has(userId)) return;
+  capListListenerAttached.add(userId);
+
+  client.addEventHandler(async (event) => {
+    try {
+      const message = event.message;
+      if (!message || !message.message) return;
+
+      const chatId = message.peerId && (message.peerId.channelId || message.peerId.chatId || message.peerId.userId);
+      if (!chatId) return;
+
+      const group = db
+        .prepare('SELECT * FROM telegram_groups WHERE user_id = ? AND chat_id = ?')
+        .get(userId, chatId.toString());
+      if (!group) return; // only track chats the user has actually added/imported
+
+      const lines = message.message.split(/\r?\n/);
+      const matches = lines.map(parseCapListLine).filter(Boolean);
+      if (!matches.length) return;
+
+      let senderName = '';
+      try {
+        const sender = await message.getSender();
+        if (sender) {
+          senderName = [sender.firstName, sender.lastName].filter(Boolean).join(' ') || (sender.username ? '@' + sender.username : '');
+        }
+      } catch {
+        // best-effort only — a failure here shouldn't drop the cap-list entry
+      }
+
+      const insert = db.prepare(
+        `INSERT INTO cap_list_entries (user_id, group_id, chat_title, sender_name, raw_text, city, state, truck_type)
+         VALUES (@userId, @groupId, @chatTitle, @senderName, @rawText, @city, @state, @truckType)`
+      );
+      for (const match of matches) {
+        insert.run({
+          userId,
+          groupId: group.id,
+          chatTitle: group.title,
+          senderName,
+          rawText: message.message,
+          city: match.city,
+          state: match.state,
+          truckType: match.truckType,
+        });
+      }
+    } catch {
+      // never let a parsing/storage error crash the event loop
+    }
+  }, new NewMessage({}));
+}
+
+async function initializeAllTelegramClients() {
+  const rows = db.prepare('SELECT user_id FROM telegram_accounts').all();
+  for (const row of rows) {
+    try {
+      await getClient(row.user_id);
+    } catch (err) {
+      console.error(`[caplist] failed to warm up Telegram client for user ${row.user_id}:`, err.message);
+    }
+  }
+}
+
+function listCapListCurrent(userId, { kind, search } = {}) {
+  // "Current" view: the latest parsed line per group, i.e. each broker's most
+  // recently reported truck status — not the full history.
+  let rows = db
+    .prepare(
+      `SELECT c.* FROM cap_list_entries c
+       INNER JOIN (
+         SELECT group_id, MAX(id) AS max_id FROM cap_list_entries WHERE user_id = ? GROUP BY group_id
+       ) latest ON latest.group_id = c.group_id AND latest.max_id = c.id
+       WHERE c.user_id = ?
+       ORDER BY c.created_at DESC, c.id DESC`
+    )
+    .all(userId, userId);
+
+  if (kind === 'team' || kind === 'solo') {
+    rows = rows.filter((r) => r.truck_type === kind);
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((r) =>
+      [r.city, r.state, r.chat_title, r.sender_name].filter(Boolean).some((v) => v.toLowerCase().includes(q))
+    );
+  }
+  return rows;
+}
+
+function listCapListLog(userId, { kind, search } = {}) {
+  let rows = db
+    .prepare('SELECT * FROM cap_list_entries WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 500')
+    .all(userId);
+
+  if (kind === 'team' || kind === 'solo') {
+    rows = rows.filter((r) => r.truck_type === kind);
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    rows = rows.filter((r) =>
+      [r.city, r.state, r.chat_title, r.sender_name].filter(Boolean).some((v) => v.toLowerCase().includes(q))
+    );
+  }
+  return rows;
+}
+
+function capListCounts(userId) {
+  const current = listCapListCurrent(userId);
+  return {
+    all: current.length,
+    team: current.filter((r) => r.truck_type === 'team').length,
+    solo: current.filter((r) => r.truck_type === 'solo').length,
+    log: db.prepare('SELECT COUNT(*) AS n FROM cap_list_entries WHERE user_id = ?').get(userId).n,
+  };
+}
+
 module.exports = {
   startLogin,
   submitCode,
@@ -406,4 +558,9 @@ module.exports = {
   getClient,
   listDialogs,
   importDialogs,
+  initializeAllTelegramClients,
+  listCapListCurrent,
+  listCapListLog,
+  capListCounts,
+  CAP_LIST_REQUEST_TEXT,
 };

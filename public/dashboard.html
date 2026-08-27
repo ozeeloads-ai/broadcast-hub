@@ -19,10 +19,38 @@
 <div class="tabs">
   <button class="tab-btn active" data-tab="tg">TG Sender</button>
   <button class="tab-btn" data-tab="mail">Email Sender</button>
+  <button class="tab-btn" data-tab="caplist">CAP LIST</button>
+  <button class="tab-btn" data-tab="distance">Дистанция</button>
 </div>
 
 <!-- ============ TG SENDER TAB ============ -->
 <div class="tab-content active" id="tab-tg">
+
+  <div class="card">
+    <h2>Отправить сообщение</h2>
+    <label>Текст сообщения</label>
+    <textarea id="tgMessageText" placeholder="Текст рассылки..."></textarea>
+
+    <div class="row" style="margin-top:14px;">
+      <div style="flex:0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="autoDeleteToggle" checked style="width:auto;" />
+        <label style="margin:0;">Авто-удаление через</label>
+      </div>
+      <div style="flex:0; width:90px;">
+        <input id="autoDeleteMinutes" type="number" min="1" value="15" />
+      </div>
+      <div style="flex:0;"><span class="muted">минут</span></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn-secondary" id="selectAllGroupsSendBtn">Выделить все группы</button>
+      <button class="btn-primary" id="sendToSelectedBtn">Отправить в выбранные</button>
+      <button class="btn-success" id="sendToAllBtn">Отправить во все группы</button>
+    </div>
+
+    <div class="error-msg" id="sendError"></div>
+    <div class="success-msg" id="sendSuccess"></div>
+  </div>
 
   <div class="card">
     <h2>Telegram-аккаунт</h2>
@@ -128,32 +156,6 @@
       </table>
       <p class="muted" id="groupsEmptyMsg">Групп пока нет.</p>
     </div>
-  </div>
-
-  <div class="card">
-    <h2>Отправить сообщение</h2>
-    <label>Текст сообщения</label>
-    <textarea id="tgMessageText" placeholder="Текст рассылки..."></textarea>
-
-    <div class="row" style="margin-top:14px;">
-      <div style="flex:0; display:flex; align-items:center; gap:8px;">
-        <input type="checkbox" id="autoDeleteToggle" checked style="width:auto;" />
-        <label style="margin:0;">Авто-удаление через</label>
-      </div>
-      <div style="flex:0; width:90px;">
-        <input id="autoDeleteMinutes" type="number" min="1" value="15" />
-      </div>
-      <div style="flex:0;"><span class="muted">минут</span></div>
-    </div>
-
-    <div class="toolbar" style="margin-top:16px;">
-      <button class="btn-secondary" id="selectAllGroupsSendBtn">Выделить все группы</button>
-      <button class="btn-primary" id="sendToSelectedBtn">Отправить в выбранные</button>
-      <button class="btn-success" id="sendToAllBtn">Отправить во все группы</button>
-    </div>
-
-    <div class="error-msg" id="sendError"></div>
-    <div class="success-msg" id="sendSuccess"></div>
   </div>
 
   <div class="card">
@@ -295,6 +297,86 @@
 
       <div class="error-msg" id="mailError"></div>
       <div class="success-msg" id="mailSuccess"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ CAP LIST TAB ============ -->
+<div class="tab-content" id="tab-caplist">
+
+  <div class="card">
+    <h2>Запросить Cap List</h2>
+    <p class="hint">Отправит в выбранные группы шаблонное сообщение: «<em id="capListTemplateText">Please share updated cap list  TEAM , SOLO</em>». Ответы вида «Las Vegas NV Solo» / «CA Team» будут автоматически распознаны и попадут в список ниже.</p>
+
+    <div class="dialog-list" id="capListGroupsList"></div>
+    <p class="muted" id="capListGroupsEmptyMsg">Группы не найдены — сначала добавьте их на вкладке TG Sender.</p>
+
+    <div class="toolbar" style="margin-top:12px;">
+      <button class="btn-secondary" id="capListSelectAllBtn">Выбрать все</button>
+      <button class="btn-primary" id="capListRequestSelectedBtn">Запросить у выбранных</button>
+      <button class="btn-success" id="capListRequestAllBtn">Запросить у всех групп</button>
+    </div>
+
+    <div class="error-msg" id="capListRequestError"></div>
+    <div class="success-msg" id="capListRequestSuccess"></div>
+  </div>
+
+  <div class="card">
+    <h2>Cap List</h2>
+    <p class="hint">Текущий статус по каждой группе (последнее сообщение с локацией), либо полная история в «Log».</p>
+
+    <input id="capListSearch" placeholder="Search city, state, broker..." style="margin-bottom:12px;" />
+
+    <div class="toolbar">
+      <button class="btn-secondary tab-toggle-btn active" id="capListFilterAll" data-kind="all">ALL <span class="count-badge" id="capListCountAll">0</span></button>
+      <button class="btn-secondary tab-toggle-btn" id="capListFilterTeam" data-kind="team">TEAM <span class="count-badge" id="capListCountTeam">0</span></button>
+      <button class="btn-secondary tab-toggle-btn" id="capListFilterSolo" data-kind="solo">SOLO <span class="count-badge" id="capListCountSolo">0</span></button>
+      <button class="btn-secondary tab-toggle-btn" id="capListFilterLog" data-kind="log">LOG <span class="count-badge" id="capListCountLog">0</span></button>
+      <button class="btn-secondary" id="capListRefreshBtn" style="margin-left:auto;">Обновить</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Локация</th>
+          <th>Тип</th>
+          <th>Группа / отправитель</th>
+          <th>Обновлено</th>
+        </tr>
+      </thead>
+      <tbody id="capListTableBody"></tbody>
+    </table>
+    <p class="muted" id="capListEmptyMsg">Пока нет данных. Нажмите «Запросить у всех групп», чтобы попросить обновить cap list.</p>
+  </div>
+
+</div>
+
+<!-- ============ DISTANCE TAB ============ -->
+<div class="tab-content" id="tab-distance">
+
+  <div class="card">
+    <h2>Расстояние и время в пути</h2>
+    <p class="hint">Укажите две точки — посчитаю расстояние в милях и примерное время в пути на машине.</p>
+
+    <div class="two-col">
+      <div>
+        <label>Откуда</label>
+        <input id="distanceFrom" placeholder="Aurora, Colorado" />
+      </div>
+      <div>
+        <label>Куда</label>
+        <input id="distanceTo" placeholder="Denver, CO" />
+      </div>
+    </div>
+
+    <button class="btn-primary" id="distanceCalcBtn" style="margin-top:16px;">Рассчитать</button>
+
+    <div class="error-msg" id="distanceError"></div>
+
+    <div id="distanceResult" style="display:none; margin-top:16px;">
+      <p class="muted" style="margin:0 0 4px;"><span id="distanceFromLabel"></span> → <span id="distanceToLabel"></span></p>
+      <p style="font-size:22px; font-weight:700; margin:0;"><span id="distanceMiles"></span> миль &nbsp;·&nbsp; <span id="distanceTime"></span></p>
     </div>
   </div>
 

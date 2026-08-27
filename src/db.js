@@ -69,6 +69,23 @@ CREATE TABLE IF NOT EXISTS brokers (
   email TEXT NOT NULL,
   added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Cap List: incoming Telegram messages from monitored groups get scanned for
+-- lines like "Las Vegas NV Solo" / "CA Team" and logged here so dispatchers
+-- can see, per group, the latest truck availability (city/state + team/solo).
+CREATE TABLE IF NOT EXISTS cap_list_entries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_id INTEGER REFERENCES telegram_groups(id) ON DELETE CASCADE,
+  chat_title TEXT,
+  sender_name TEXT,
+  raw_text TEXT,
+  city TEXT,
+  state TEXT,
+  truck_type TEXT NOT NULL, -- 'team' or 'solo'
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cap_list_user ON cap_list_entries(user_id);
 `);
 
 module.exports = db;

@@ -88,6 +88,28 @@ router.post('/dialogs/import', async (req, res) => {
   }
 });
 
+router.get('/caplist/template', (req, res) => {
+  res.json({ text: tg.CAP_LIST_REQUEST_TEXT });
+});
+
+router.get('/caplist', (req, res) => {
+  const kind = ['team', 'solo'].includes(req.query.kind) ? req.query.kind : null;
+  const search = (req.query.search || '').trim();
+  res.json({
+    entries: tg.listCapListCurrent(req.session.userId, { kind, search }),
+    counts: tg.capListCounts(req.session.userId),
+  });
+});
+
+router.get('/caplist/log', (req, res) => {
+  const kind = ['team', 'solo'].includes(req.query.kind) ? req.query.kind : null;
+  const search = (req.query.search || '').trim();
+  res.json({
+    entries: tg.listCapListLog(req.session.userId, { kind, search }),
+    counts: tg.capListCounts(req.session.userId),
+  });
+});
+
 router.post('/send', async (req, res) => {
   try {
     const { groupIds, text, autoDeleteMinutes } = req.body || {};

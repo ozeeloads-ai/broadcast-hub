@@ -165,6 +165,8 @@ async function refreshGroups() {
       await refreshGroups();
     });
   });
+
+  renderCapListGroups();
 }
 
 document.getElementById('addGroupBtn').addEventListener('click', async () => {
@@ -375,6 +377,152 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
+// ================= CAP LIST =================
+
+let capListTemplateText = 'Please share updated cap list  TEAM , SOLO';
+let capListKind = 'all'; // 'all' | 'team' | 'solo' | 'log'
+let capListSearchTimer = null;
+
+(async function loadCapListTemplate() {
+  try {
+    const { text } = await api('/api/telegram/caplist/template');
+    capListTemplateText = text;
+    document.getElementById('capListTemplateText').textContent = text;
+  } catch {
+    // fall back to the hard-coded default already shown in the HTML
+  }
+})();
+
+function renderCapListGroups() {
+  const listEl = document.getElementById('capListGroupsList');
+  const emptyEl = document.getElementById('capListGroupsEmptyMsg');
+  if (!listEl) return;
+  listEl.innerHTML = '';
+  emptyEl.style.display = groups.length ? 'none' : 'block';
+
+  for (const g of groups) {
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" class="caplist-group-checkbox" value="${g.id}" /><span>${escapeHtml(g.title || '(без названия)')}</span>`;
+    listEl.appendChild(label);
+  }
+}
+
+document.getElementById('capListSelectAllBtn').addEventListener('click', () => {
+  document.querySelectorAll('.caplist-group-checkbox').forEach((cb) => (cb.checked = true));
+});
+
+async function requestCapList(groupIds) {
+  const errEl = document.getElementById('capListRequestError');
+  const okEl = document.getElementById('capListRequestSuccess');
+  hide(errEl); hide(okEl);
+  if (!groupIds.length) return flash(errEl, 'Выберите хотя бы одну группу.', true);
+
+  try {
+    const { results } = await api('/api/telegram/send', {
+      method: 'POST',
+      body: JSON.stringify({ groupIds, text: capListTemplateText, autoDeleteMinutes: null }),
+    });
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) {
+      flash(errEl, `Отправлено с ошибками: ${failed.map((f) => `${f.title}: ${f.error}`).join('; ')}`, true);
+    } else {
+      flash(okEl, `Запрос cap list отправлен в ${results.length} групп(у).`);
+    }
+  } catch (err) {
+    flash(errEl, err.message, true);
+  }
+}
+
+document.getElementById('capListRequestSelectedBtn').addEventListener('click', () => {
+  const ids = [...document.querySelectorAll('.caplist-group-checkbox:checked')].map((cb) => Number(cb.value));
+  requestCapList(ids);
+});
+document.getElementById('capListRequestAllBtn').addEventListener('click', () => {
+  requestCapList(groups.map((g) => g.id));
+});
+
+function formatCapListLocation(entry) {
+  return entry.city ? `${entry.city}, ${entry.state}` : entry.state;
+}
+
+async function loadCapList() {
+  const kindParam = capListKind === 'team' || capListKind === 'solo' ? `kind=${capListKind}` : '';
+  const search = document.getElementById('capListSearch').value.trim();
+  const searchParam = search ? `search=${encodeURIComponent(search)}` : '';
+  const query = [kindParam, searchParam].filter(Boolean).join('&');
+  const endpoint = capListKind === 'log' ? '/api/telegram/caplist/log' : '/api/telegram/caplist';
+
+  try {
+    const { entries, counts } = await api(`${endpoint}${query ? '?' + query : ''}`);
+
+    document.getElementById('capListCountAll').textContent = counts.all;
+    document.getElementById('capListCountTeam').textContent = counts.team;
+    document.getElementById('capListCountSolo').textContent = counts.solo;
+    document.getElementById('capListCountLog').textContent = counts.log;
+
+    const tbody = document.getElementById('capListTableBody');
+    tbody.innerHTML = '';
+    document.getElementById('capListEmptyMsg').style.display = entries.length ? 'none' : 'block';
+
+    for (const entry of entries) {
+      const tr = document.createElement('tr');
+      const who = [entry.chat_title, entry.sender_name].filter(Boolean).join(' — ');
+      tr.innerHTML = `
+        <td>${escapeHtml(formatCapListLocation(entry))}</td>
+        <td><span class="badge ${entry.truck_type === 'team' ? '' : 'scheduled'}">${entry.truck_type.toUpperCase()}</span></td>
+        <td>${escapeHtml(who)}</td>
+        <td>${entry.created_at}</td>
+      `;
+      tbody.appendChild(tr);
+    }
+  } catch (err) {
+    flash(document.getElementById('capListRequestError'), err.message, true);
+  }
+}
+
+document.querySelectorAll('#tab-caplist .tab-toggle-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    capListKind = btn.dataset.kind;
+    document.querySelectorAll('#tab-caplist .tab-toggle-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    loadCapList();
+  });
+});
+
+document.getElementById('capListRefreshBtn').addEventListener('click', loadCapList);
+document.getElementById('capListSearch').addEventListener('input', () => {
+  clearTimeout(capListSearchTimer);
+  capListSearchTimer = setTimeout(loadCapList, 350);
+});
+
+// ================= DISTANCE =================
+
+document.getElementById('distanceCalcBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('distanceError');
+  const resultEl = document.getElementById('distanceResult');
+  hide(errEl);
+  hide(resultEl);
+
+  const from = document.getElementById('distanceFrom').value.trim();
+  const to = document.getElementById('distanceTo').value.trim();
+  if (!from || !to) return flash(errEl, 'Укажите обе точки маршрута.', true);
+
+  try {
+    const result = await api('/api/distance/calculate', {
+      method: 'POST',
+      body: JSON.stringify({ from, to }),
+    });
+    document.getElementById('distanceFromLabel').textContent = result.fromLabel;
+    document.getElementById('distanceToLabel').textContent = result.toLabel;
+    document.getElementById('distanceMiles').textContent = result.miles;
+    const timeText = result.hours > 0 ? `${result.hours} ч ${result.minutes} мин` : `${result.minutes} мин`;
+    document.getElementById('distanceTime').textContent = timeText;
+    show(resultEl);
+  } catch (err) {
+    flash(errEl, err.message, true);
+  }
+});
+
 // ================= EMAIL SENDER =================
 
 let brokers = [];
@@ -520,5 +668,5 @@ document.getElementById('sendToAllBrokersBtn').addEventListener('click', () => s
 // ---------- init ----------
 
 (async function init() {
-  await Promise.all([refreshTgStatus(), refreshGroups(), refreshMessages(), refreshMailStatus(), refreshBrokers()]);
+  await Promise.all([refreshTgStatus(), refreshGroups(), refreshMessages(), refreshMailStatus(), refreshBrokers(), loadCapList()]);
 })();
