@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Broadcast Hub</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">📡 Broadcast Hub</div>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <span class="whoami" id="whoami"></span>
+    <button class="btn-secondary" id="logoutBtn">Выйти</button>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="tg">TG Sender</button>
+  <button class="tab-btn" data-tab="mail">Email Sender</button>
+</div>
+
+<!-- ============ TG SENDER TAB ============ -->
+<div class="tab-content active" id="tab-tg">
+
+  <div class="card">
+    <h2>Telegram-аккаунт</h2>
+    <p class="hint">Подключите свой личный Telegram, чтобы рассылать сообщения в группы от его имени.</p>
+
+    <div id="tgConnectedBlock" style="display:none;">
+      <span class="status-pill connected">🟢 Подключено: <span id="tgAccountName"></span></span>
+      <button class="btn-secondary" id="tgDisconnectBtn" style="margin-left:12px;">Отключить</button>
+    </div>
+
+    <div id="tgLoginBlock">
+      <div id="tgStepPhone">
+        <div class="row">
+          <div>
+            <label>Номер телефона</label>
+            <input id="tgPhone" placeholder="+996700000000" />
+          </div>
+          <div style="flex:0;">
+            <button class="btn-primary" id="tgSendCodeBtn">Получить код</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="tgStepCode" style="display:none;">
+        <div class="row">
+          <div>
+            <label>Код из Telegram</label>
+            <input id="tgCode" placeholder="12345" />
+          </div>
+          <div style="flex:0;">
+            <button class="btn-primary" id="tgVerifyCodeBtn">Подтвердить</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="tgStepPassword" style="display:none;">
+        <div class="row">
+          <div>
+            <label>Пароль двухфакторной аутентификации</label>
+            <input id="tgPassword" type="password" />
+          </div>
+          <div style="flex:0;">
+            <button class="btn-primary" id="tgVerifyPasswordBtn">Войти</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="error-msg" id="tgError"></div>
+    <div class="success-msg" id="tgSuccess"></div>
+  </div>
+
+  <div class="card">
+    <h2>Найти чаты в Telegram</h2>
+    <p class="hint">Выберите группы, каналы или личные чаты прямо из своего Telegram — не нужно добавлять вручную.</p>
+
+    <div class="dialog-picker-tabs">
+      <button class="btn-secondary tab-toggle-btn active" id="dialogsKindGroups" data-kind="groups">Группы и каналы</button>
+      <button class="btn-secondary tab-toggle-btn" id="dialogsKindPrivate" data-kind="private">Личные чаты</button>
+      <button class="btn-secondary" id="refreshDialogsBtn" style="margin-left:auto;">Обновить список</button>
+    </div>
+
+    <p class="found-count" id="dialogsFoundCount" style="display:none;"></p>
+    <input id="dialogsSearch" placeholder="Поиск..." style="margin-bottom:12px;" />
+
+    <div class="dialog-list" id="dialogsList"></div>
+    <p class="muted" id="dialogsEmptyMsg">Нажмите «Обновить список», чтобы загрузить чаты из вашего Telegram.</p>
+
+    <div class="toolbar">
+      <button class="btn-secondary" id="selectAllDialogsBtn">Выбрать все</button>
+      <button class="btn-primary" id="importDialogsBtn">Добавить выбранные</button>
+    </div>
+
+    <div class="error-msg" id="dialogsError"></div>
+    <div class="success-msg" id="dialogsSuccess"></div>
+  </div>
+
+  <div class="card">
+    <div class="collapsible-header" id="groupsCardToggle">
+      <h2 style="margin:0;">Группы (управление вручную)</h2>
+      <span class="toggle-hint" id="groupsCardToggleHint">Показать ▾</span>
+    </div>
+
+    <div class="collapsible-body collapsed" id="groupsCardBody">
+      <p class="hint">Здесь — список всех добавленных групп. Можно также добавить группу вручную по @username, ссылке-приглашению (t.me/+xxx) или ID.</p>
+
+      <div class="inline-form" style="margin-bottom:16px;">
+        <input id="groupIdentifier" placeholder="@my_group, https://t.me/+AbCdEf или -1001234567890" />
+        <button class="btn-primary" id="addGroupBtn">Добавить группу</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th class="checkbox-cell"><input type="checkbox" id="selectAllGroups" /></th>
+            <th>Название</th>
+            <th>Тип</th>
+            <th>Добавлено</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="groupsTableBody"></tbody>
+      </table>
+      <p class="muted" id="groupsEmptyMsg">Групп пока нет.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Отправить сообщение</h2>
+    <label>Текст сообщения</label>
+    <textarea id="tgMessageText" placeholder="Текст рассылки..."></textarea>
+
+    <div class="row" style="margin-top:14px;">
+      <div style="flex:0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="autoDeleteToggle" checked style="width:auto;" />
+        <label style="margin:0;">Авто-удаление через</label>
+      </div>
+      <div style="flex:0; width:90px;">
+        <input id="autoDeleteMinutes" type="number" min="1" value="15" />
+      </div>
+      <div style="flex:0;"><span class="muted">минут</span></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn-secondary" id="selectAllGroupsSendBtn">Выделить все группы</button>
+      <button class="btn-primary" id="sendToSelectedBtn">Отправить в выбранные</button>
+      <button class="btn-success" id="sendToAllBtn">Отправить во все группы</button>
+    </div>
+
+    <div class="error-msg" id="sendError"></div>
+    <div class="success-msg" id="sendSuccess"></div>
+  </div>
+
+  <div class="card">
+    <h2>Отправленные сообщения</h2>
+    <p class="hint">Ручное удаление — выделите сообщения и нажмите «Удалить выбранные». Сообщения с авто-удалением исчезнут сами по истечении таймера.</p>
+
+    <div class="toolbar">
+      <button class="btn-secondary" id="selectAllMessagesBtn">Выделить все</button>
+      <button class="btn-danger" id="deleteSelectedMessagesBtn">Удалить выбранные</button>
+      <button class="btn-secondary" id="refreshMessagesBtn">Обновить список</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th class="checkbox-cell"><input type="checkbox" id="selectAllMessagesHeader" /></th>
+          <th>Группа</th>
+          <th>Текст</th>
+          <th>Отправлено</th>
+          <th>Статус</th>
+        </tr>
+      </thead>
+      <tbody id="messagesTableBody"></tbody>
+    </table>
+    <p class="muted" id="messagesEmptyMsg">Сообщений пока нет.</p>
+  </div>
+
+</div>
+
+<!-- ============ EMAIL SENDER TAB ============ -->
+<div class="tab-content" id="tab-mail">
+
+  <div class="card">
+    <h2>Отправить письмо</h2>
+    <label>Тема</label>
+    <input id="mailSubject" placeholder="Тема письма" />
+    <label>Текст письма</label>
+    <textarea id="mailBody" placeholder="Текст письма..."></textarea>
+
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn-secondary" id="selectAllBrokersSendBtn">Выделить всех брокеров</button>
+      <button class="btn-primary" id="sendToSelectedBrokersBtn">Отправить выбранным</button>
+      <button class="btn-success" id="sendToAllBrokersBtn">Отправить всем</button>
+    </div>
+
+    <div class="error-msg" id="mailSendError"></div>
+    <div class="success-msg" id="mailSendSuccess"></div>
+  </div>
+
+  <div class="card">
+    <h2>Брокеры</h2>
+    <div class="two-col">
+      <div>
+        <label>Имя</label>
+        <input id="brokerFirstName" />
+      </div>
+      <div>
+        <label>Фамилия</label>
+        <input id="brokerLastName" />
+      </div>
+    </div>
+    <div class="two-col">
+      <div>
+        <label>Рабочие часы</label>
+        <input id="brokerWorkHours" placeholder="Пн-Пт 09:00-18:00" />
+      </div>
+      <div>
+        <label>Email</label>
+        <input id="brokerEmail" placeholder="broker@company.com" />
+      </div>
+    </div>
+    <button class="btn-primary" id="addBrokerBtn" style="margin-top:14px;">Добавить брокера</button>
+
+    <table style="margin-top:20px;">
+      <thead>
+        <tr>
+          <th class="checkbox-cell"><input type="checkbox" id="selectAllBrokers" /></th>
+          <th>Имя</th>
+          <th>Фамилия</th>
+          <th>Рабочие часы</th>
+          <th>Email</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="brokersTableBody"></tbody>
+    </table>
+    <p class="muted" id="brokersEmptyMsg">Брокеров пока нет.</p>
+  </div>
+
+  <div class="card">
+    <div class="collapsible-header" id="mailCardToggle">
+      <h2 style="margin:0;">Почтовый аккаунт</h2>
+      <span class="toggle-hint" id="mailCardToggleHint">Показать ▾</span>
+    </div>
+
+    <div class="collapsible-body collapsed" id="mailCardBody">
+      <p class="hint">Подключите свою почту (SMTP), чтобы отправлять письма брокерам от своего имени.</p>
+
+      <div id="mailConnectedBlock" style="display:none;">
+        <span class="status-pill connected">🟢 Подключено: <span id="mailAccountEmail"></span></span>
+        <button class="btn-secondary" id="mailDisconnectBtn" style="margin-left:12px;">Отключить</button>
+      </div>
+
+      <div id="mailConnectForm">
+        <div class="toolbar">
+          <button class="btn-secondary" data-preset="gmail">Gmail</button>
+          <button class="btn-secondary" data-preset="outlook">Outlook</button>
+          <button class="btn-secondary" data-preset="custom">Свой SMTP</button>
+        </div>
+
+        <div class="two-col">
+          <div>
+            <label>Ваш Email</label>
+            <input id="mailEmail" placeholder="you@gmail.com" />
+
+            <label>SMTP логин (обычно = email)</label>
+            <input id="mailUser" placeholder="you@gmail.com" />
+
+            <label>Пароль / пароль приложения</label>
+            <input id="mailPass" type="password" />
+          </div>
+          <div>
+            <label>SMTP сервер</label>
+            <input id="mailHost" placeholder="smtp.gmail.com" />
+
+            <label>Порт</label>
+            <input id="mailPort" placeholder="587" />
+
+            <div style="display:flex; align-items:center; gap:8px; margin-top:14px;">
+              <input type="checkbox" id="mailSecure" style="width:auto;" />
+              <label style="margin:0;">SSL/TLS (обычно для порта 465)</label>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn-primary" id="mailConnectBtn" style="margin-top:16px;">Подключить почту</button>
+        <p class="muted">Для Gmail/Outlook обычно нужен «пароль приложения» (16 символов), а не обычный пароль от аккаунта. Для Gmail получить его можно здесь: <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a></p>
+      </div>
+
+      <div class="error-msg" id="mailError"></div>
+      <div class="success-msg" id="mailSuccess"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

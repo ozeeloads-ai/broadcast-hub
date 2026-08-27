@@ -182,14 +182,72 @@ function parseIdentifier(raw) {
 }
 
 function chatFromEntity(entity) {
-  // entity is an Api.Channel or Api.Chat instance
+  // entity is an Api.Channel, Api.Chat or Api.User instance
   if (entity.className === 'Channel') {
     return { chatId: entity.id.toString(), accessHash: entity.accessHash?.toString() || null, peerType: 'channel', title: entity.title };
   }
   if (entity.className === 'Chat' || entity.className === 'ChatForbidden') {
     return { chatId: entity.id.toString(), accessHash: null, peerType: 'chat', title: entity.title };
   }
-  throw new Error('Указанный адрес не является группой или каналом.');
+  if (entity.className === 'User') {
+    const name = [entity.firstName, entity.lastName].filter(Boolean).join(' ') || (entity.username ? '@' + entity.username : 'Без имени');
+    return { chatId: entity.id.toString(), accessHash: entity.accessHash?.toString() || null, peerType: 'user', title: name };
+  }
+  throw new Error('Указанный адрес не является группой, каналом или личным чатом.');
+}
+
+// ---- Browsing the account's existing Telegram dialogs (groups/channels or DMs) ----
+
+async function listDialogs(userId, kind) {
+  const client = await getClient(userId);
+  const dialogs = await client.getDialogs({ limit: 300 });
+
+  const results = [];
+  for (const d of dialogs) {
+    const entity = d.entity;
+    if (!entity) continue;
+    const cls = entity.className;
+    const isGroupOrChannel = cls === 'Chat' || cls === 'ChatForbidden' || cls === 'Channel';
+    const isPrivateUser = cls === 'User' && !entity.bot && !entity.self;
+
+    if (kind === 'private' && !isPrivateUser) continue;
+    if (kind !== 'private' && !isGroupOrChannel) continue;
+
+    let title;
+    if (cls === 'User') {
+      title = [entity.firstName, entity.lastName].filter(Boolean).join(' ') || (entity.username ? '@' + entity.username : 'Без имени');
+    } else {
+      title = entity.title || (entity.username ? '@' + entity.username : 'Без названия');
+    }
+
+    results.push({ id: entity.id.toString(), title, type: cls });
+  }
+  return results;
+}
+
+async function importDialogs(userId, ids) {
+  const client = await getClient(userId);
+  const results = [];
+  for (const rawId of ids) {
+    try {
+      const idValue = /^\d+$/.test(rawId) && rawId.length > 15 ? BigInt(rawId) : Number(rawId);
+      const entity = await client.getEntity(idValue);
+      const chat = chatFromEntity(entity);
+
+      const info = db.prepare(
+        `INSERT INTO telegram_groups (user_id, chat_id, access_hash, peer_type, title, identifier)
+         VALUES (@userId, @chatId, @accessHash, @peerType, @title, @identifier)
+         ON CONFLICT(user_id, chat_id) DO UPDATE SET
+           access_hash=excluded.access_hash, peer_type=excluded.peer_type,
+           title=excluded.title, identifier=excluded.identifier`
+      ).run({ userId, identifier: 'telegram-dialog', ...chat });
+
+      results.push({ ok: true, id: rawId, dbId: info.lastInsertRowid, title: chat.title });
+    } catch (err) {
+      results.push({ ok: false, id: rawId, error: err.message });
+    }
+  }
+  return results;
 }
 
 async function addGroup(userId, rawIdentifier) {
@@ -243,6 +301,9 @@ function buildInputPeer(group) {
   }
   if (group.peer_type === 'chat') {
     return new Api.InputPeerChat({ chatId: BigInt(group.chat_id) });
+  }
+  if (group.peer_type === 'user') {
+    return new Api.InputPeerUser({ userId: BigInt(group.chat_id), accessHash: BigInt(group.access_hash) });
   }
   throw new Error('Неизвестный тип группы.');
 }
@@ -343,4 +404,6 @@ module.exports = {
   deleteMessagesByDbIds,
   buildInputPeer,
   getClient,
+  listDialogs,
+  importDialogs,
 };

@@ -65,6 +65,29 @@ router.delete('/groups/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/dialogs', async (req, res) => {
+  try {
+    const kind = req.query.kind === 'private' ? 'private' : 'groups';
+    const dialogs = await tg.listDialogs(req.session.userId, kind);
+    res.json(dialogs);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/dialogs/import', async (req, res) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Не выбрано ни одного чата.' });
+    }
+    const results = await tg.importDialogs(req.session.userId, ids);
+    res.json({ results });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.post('/send', async (req, res) => {
   try {
     const { groupIds, text, autoDeleteMinutes } = req.body || {};
