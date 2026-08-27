@@ -39,6 +39,10 @@ async function getDistance(fromQuery, toQuery) {
   return {
     fromLabel: from.label,
     toLabel: to.label,
+    fromLat: from.lat,
+    fromLon: from.lon,
+    toLat: to.lat,
+    toLon: to.lon,
     miles: Math.round(miles * 10) / 10,
     hours: Math.floor(totalMinutes / 60),
     minutes: Math.round(totalMinutes % 60),

@@ -63,36 +63,51 @@ setupCollapsible('mailCardToggle', 'mailCardBody', 'mailCardToggleHint');
 
 // ---------- US time zone clocks ----------
 
+function formatZoneMoment(date, tz) {
+  const timeParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).formatToParts(date);
+
+  const hour = timeParts.find((p) => p.type === 'hour')?.value || '--';
+  const minute = timeParts.find((p) => p.type === 'minute')?.value || '--';
+  const ampm = (timeParts.find((p) => p.type === 'dayPeriod')?.value || '').toUpperCase();
+
+  const dateParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).formatToParts(date);
+
+  const weekday = dateParts.find((p) => p.type === 'weekday')?.value || '';
+  const month = dateParts.find((p) => p.type === 'month')?.value || '';
+  const day = dateParts.find((p) => p.type === 'day')?.value || '';
+
+  return { hm: `${hour}:${minute}`, ampm, dateLabel: `${weekday} ${month} ${day}`.toUpperCase() };
+}
+
 function updateTimeZoneClocks() {
   const now = new Date();
+
   document.querySelectorAll('.tz-card').forEach((card) => {
+    const moment = formatZoneMoment(now, card.dataset.tz);
+    card.querySelector('.tz-hm').textContent = moment.hm;
+    card.querySelector('.tz-ampm').textContent = moment.ampm;
+    card.querySelector('.tz-date').textContent = moment.dateLabel;
+  });
+
+  document.querySelectorAll('.tz-pro-card').forEach((card) => {
     const tz = card.dataset.tz;
-
-    const timeParts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    }).formatToParts(now);
-
-    const hour = timeParts.find((p) => p.type === 'hour')?.value || '--';
-    const minute = timeParts.find((p) => p.type === 'minute')?.value || '--';
-    const ampm = (timeParts.find((p) => p.type === 'dayPeriod')?.value || '').toUpperCase();
-
-    const dateParts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-    }).formatToParts(now);
-
-    const weekday = dateParts.find((p) => p.type === 'weekday')?.value || '';
-    const month = dateParts.find((p) => p.type === 'month')?.value || '';
-    const day = dateParts.find((p) => p.type === 'day')?.value || '';
-
-    card.querySelector('.tz-hm').textContent = `${hour}:${minute}`;
-    card.querySelector('.tz-ampm').textContent = ampm;
-    card.querySelector('.tz-date').textContent = `${weekday} ${month} ${day}`.toUpperCase();
+    card.querySelectorAll('.tz-pro-row').forEach((row) => {
+      const offsetHours = Number(row.dataset.offset) || 0;
+      const future = new Date(now.getTime() + offsetHours * 60 * 60 * 1000);
+      const moment = formatZoneMoment(future, tz);
+      row.querySelector('.tz-pro-time').textContent = `${moment.hm} ${moment.ampm}`;
+      row.querySelector('.tz-pro-date').textContent = moment.dateLabel;
+    });
   });
 }
 
@@ -584,6 +599,8 @@ document.getElementById('capListSearch').addEventListener('input', () => {
 
 // ================= DISTANCE =================
 
+let lastDistanceResult = null;
+
 document.getElementById('distanceCalcBtn').addEventListener('click', async () => {
   const errEl = document.getElementById('distanceError');
   const resultEl = document.getElementById('distanceResult');
@@ -599,14 +616,37 @@ document.getElementById('distanceCalcBtn').addEventListener('click', async () =>
       method: 'POST',
       body: JSON.stringify({ from, to }),
     });
+    lastDistanceResult = result;
+
     document.getElementById('distanceFromLabel').textContent = result.fromLabel;
     document.getElementById('distanceToLabel').textContent = result.toLabel;
     document.getElementById('distanceMiles').textContent = result.miles;
     const timeText = result.hours > 0 ? `${result.hours} ч ${result.minutes} мин` : `${result.minutes} мин`;
     document.getElementById('distanceTime').textContent = timeText;
+
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${result.fromLat},${result.fromLon}&destination=${result.toLat},${result.toLon}&travelmode=driving`;
+    document.getElementById('distanceMapsLink').href = mapsUrl;
+
+    hide(document.getElementById('distanceCopySuccess'));
     show(resultEl);
   } catch (err) {
     flash(errEl, err.message, true);
+  }
+});
+
+document.getElementById('distanceCopyBtn').addEventListener('click', async () => {
+  if (!lastDistanceResult) return;
+  const r = lastDistanceResult;
+  const timeText = r.hours > 0 ? `${r.hours} ч ${r.minutes} мин` : `${r.minutes} мин`;
+  const mapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${r.fromLat},${r.fromLon}&destination=${r.toLat},${r.toLon}&travelmode=driving`;
+  const text = `${r.fromLabel} → ${r.toLabel}\n${r.miles} миль · ${timeText}\n${mapsUrl}`;
+
+  const okEl = document.getElementById('distanceCopySuccess');
+  try {
+    await navigator.clipboard.writeText(text);
+    flash(okEl, 'Скопировано в буфер обмена.');
+  } catch {
+    flash(okEl, 'Не удалось скопировать автоматически — выделите и скопируйте текст вручную.', true);
   }
 });
 

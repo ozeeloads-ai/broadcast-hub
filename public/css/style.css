@@ -199,6 +199,21 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tz-time .tz-ampm { font-size: 13px; margin-left: 4px; color: var(--muted); }
 .tz-date { margin-top: 6px; font-size: 11px; color: var(--muted); letter-spacing: .03em; }
 
+.tz-group { display: flex; flex-direction: column; gap: 8px; }
+
+.tz-pro-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--tz-color);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.tz-pro-header { font-size: 10px; font-weight: 700; color: var(--tz-color); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+.tz-pro-row { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 2px 0; font-size: 12px; }
+.tz-pro-offset { color: var(--muted); font-weight: 600; min-width: 26px; }
+.tz-pro-time { font-weight: 700; color: var(--text); }
+.tz-pro-date { color: var(--muted); font-size: 10px; }
+
 .tabs {
   display: flex;
   gap: 4px;
