@@ -123,17 +123,6 @@
     <div id="tgConnectedBlock" style="display:none;">
       <span class="status-pill connected">🟢 Подключено: <span id="tgAccountName"></span></span>
       <button class="btn-secondary" id="tgDisconnectBtn" style="margin-left:12px;">Отключить</button>
-
-      <div class="row" style="margin-top:14px;">
-        <div>
-          <label>Подпись под сообщениями (например, @WaLllyWest)</label>
-          <input id="tgSignature" placeholder="@ваш_ник" />
-        </div>
-        <div style="flex:0; align-self:flex-end;">
-          <button class="btn-secondary" id="tgSignatureSaveBtn">Сохранить</button>
-        </div>
-      </div>
-      <p class="hint">Эта подпись будет автоматически добавляться в конец каждого сообщения, отправленного через сайт от вашего имени.</p>
     </div>
 
     <div id="tgLoginBlock">
@@ -474,9 +463,9 @@
 
     <div class="error-msg" id="brokerModalError"></div>
 
-    <div class="toolbar" style="margin-top:18px; justify-content:flex-end;">
-      <button class="btn-secondary" id="brokerModalCancelBtn">Отмена</button>
-      <button class="btn-primary" id="brokerModalSaveBtn">Сохранить</button>
+    <div class="toolbar" style="margin-top:18px; align-items:center;">
+      <span class="muted" id="brokerModalSaveStatus"></span>
+      <button class="btn-secondary" id="brokerModalCancelBtn" style="margin-left:auto;">Закрыть</button>
     </div>
   </div>
 </div>

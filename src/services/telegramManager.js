@@ -158,27 +158,9 @@ async function getClient(userId) {
 }
 
 function getStatus(userId) {
-  const row = db
-    .prepare('SELECT phone, display_name, connected_at, signature FROM telegram_accounts WHERE user_id = ?')
-    .get(userId);
+  const row = db.prepare('SELECT phone, display_name, connected_at FROM telegram_accounts WHERE user_id = ?').get(userId);
   if (!row) return { connected: false };
-  return {
-    connected: true,
-    phone: row.phone,
-    displayName: row.display_name,
-    connectedAt: row.connected_at,
-    signature: row.signature || '',
-  };
-}
-
-// Lets a user set a handle (e.g. "@WaLllyWest") that gets automatically
-// appended to every message sent through their Telegram account, so
-// automated sends still read as personally coming from them.
-function setSignature(userId, signature) {
-  const trimmed = (signature || '').trim();
-  const info = db.prepare('UPDATE telegram_accounts SET signature = ? WHERE user_id = ?').run(trimmed, userId);
-  if (info.changes === 0) throw new Error('Telegram-аккаунт не подключён.');
-  return { signature: trimmed };
+  return { connected: true, phone: row.phone, displayName: row.display_name, connectedAt: row.connected_at };
 }
 
 async function disconnect(userId) {
@@ -341,15 +323,11 @@ async function sendToGroups(userId, groupIds, text, autoDeleteMinutes) {
     .prepare(`SELECT * FROM telegram_groups WHERE user_id = ? AND id IN (${groupIds.map(() => '?').join(',')})`)
     .all(userId, ...groupIds);
 
-  const account = db.prepare('SELECT signature FROM telegram_accounts WHERE user_id = ?').get(userId);
-  const signature = account && account.signature ? account.signature.trim() : '';
-  const outgoingText = signature ? `${text}\n\n${signature}` : text;
-
   const results = [];
   for (const group of groups) {
     try {
       const peer = buildInputPeer(group);
-      const message = await client.sendMessage(peer, { message: outgoingText });
+      const message = await client.sendMessage(peer, { message: text });
       const autoDeleteAt =
         autoDeleteMinutes && autoDeleteMinutes > 0
           ? new Date(Date.now() + autoDeleteMinutes * 60 * 1000).toISOString()
@@ -358,7 +336,7 @@ async function sendToGroups(userId, groupIds, text, autoDeleteMinutes) {
       db.prepare(
         `INSERT INTO sent_messages (user_id, group_id, chat_id, message_id, text, auto_delete_at)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(userId, group.id, group.chat_id, message.id, outgoingText, autoDeleteAt);
+      ).run(userId, group.id, group.chat_id, message.id, text, autoDeleteAt);
 
       results.push({ groupId: group.id, title: group.title, ok: true });
     } catch (err) {
@@ -772,7 +750,6 @@ module.exports = {
   clearCapList,
   getLastPull,
   pullCapListHistory,
-  setSignature,
   parseCapListLine,
   CAP_LIST_REQUEST_TEXT,
 };

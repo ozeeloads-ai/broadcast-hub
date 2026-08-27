@@ -45,15 +45,6 @@ router.post('/disconnect', async (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/signature', (req, res) => {
-  try {
-    const result = tg.setSignature(req.session.userId, (req.body || {}).signature);
-    res.json(result);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
 router.get('/groups', (req, res) => {
   res.json(tg.listGroups(req.session.userId));
 });

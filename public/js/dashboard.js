@@ -69,6 +69,44 @@ function setupCollapsible(headerId, bodyId, hintId) {
 setupCollapsible('groupsCardToggle', 'groupsCardBody', 'groupsCardToggleHint');
 setupCollapsible('mailCardToggle', 'mailCardBody', 'mailCardToggleHint');
 
+// Every other card on every tab gets the same show/hide behavior
+// automatically, without needing hand-written collapsible-header/body markup
+// for each one: whatever the card's first element is (a plain <h2>, or a
+// more complex header row like the brokers panel's) becomes the clickable
+// header, and everything after it becomes the collapsible body.
+function makeCardAutoCollapsible(card) {
+  if (card.querySelector(':scope > .collapsible-header')) return; // already wired above
+  const originalHeader = card.firstElementChild;
+  if (!originalHeader) return;
+  const bodyChildren = [...card.children].slice(1);
+  if (!bodyChildren.length) return;
+
+  const headerWrap = document.createElement('div');
+  headerWrap.className = 'collapsible-header';
+  card.insertBefore(headerWrap, originalHeader);
+  headerWrap.appendChild(originalHeader);
+
+  const hint = document.createElement('span');
+  hint.className = 'toggle-hint';
+  hint.textContent = 'Скрыть ▴';
+  headerWrap.appendChild(hint);
+
+  const body = document.createElement('div');
+  body.className = 'collapsible-body';
+  bodyChildren.forEach((el) => body.appendChild(el));
+  card.appendChild(body);
+
+  headerWrap.addEventListener('click', (e) => {
+    // Don't collapse when the click was actually on a control inside the
+    // header (e.g. the brokers panel's "+ Добавить" / "Импорт CSV" buttons).
+    if (e.target.closest('button, a, input, select, textarea, label')) return;
+    const collapsed = body.classList.toggle('collapsed');
+    hint.textContent = collapsed ? 'Показать ▾' : 'Скрыть ▴';
+  });
+}
+
+document.querySelectorAll('.card').forEach(makeCardAutoCollapsible);
+
 // ---------- US time zone clocks ----------
 
 function formatZoneMoment(date, tz) {
@@ -132,7 +170,6 @@ async function refreshTgStatus() {
   const status = await api('/api/telegram/status');
   if (status.connected) {
     document.getElementById('tgAccountName').textContent = `${status.displayName} (${status.phone})`;
-    document.getElementById('tgSignature').value = status.signature || '';
     show(document.getElementById('tgConnectedBlock'));
     hide(document.getElementById('tgLoginBlock'));
   } else {
@@ -140,20 +177,6 @@ async function refreshTgStatus() {
     show(document.getElementById('tgLoginBlock'));
   }
 }
-
-document.getElementById('tgSignatureSaveBtn').addEventListener('click', async () => {
-  const errEl = document.getElementById('tgError');
-  hide(errEl);
-  try {
-    await api('/api/telegram/signature', {
-      method: 'POST',
-      body: JSON.stringify({ signature: document.getElementById('tgSignature').value }),
-    });
-    flash(document.getElementById('tgSuccess'), 'Подпись сохранена.');
-  } catch (err) {
-    flash(errEl, err.message, true);
-  }
-});
 
 document.getElementById('tgSendCodeBtn').addEventListener('click', async () => {
   const phone = document.getElementById('tgPhone').value.trim();
@@ -1080,16 +1103,19 @@ function openBrokerModal(broker) {
 }
 
 document.getElementById('addBrokerOpenBtn').addEventListener('click', () => openBrokerModal(null));
-document.getElementById('brokerModalCancelBtn').addEventListener('click', () => {
+document.getElementById('brokerModalCancelBtn').addEventListener('click', async () => {
   document.getElementById('brokerModalOverlay').style.display = 'none';
+  await refreshBrokers();
 });
 
-document.getElementById('brokerModalSaveBtn').addEventListener('click', async () => {
-  const errEl = document.getElementById('brokerModalError');
-  hide(errEl);
+// ---- Auto-save: every field change in the modal saves itself, no explicit
+// "Сохранить" click needed. Text fields (name/email/notes) are debounced so
+// we're not firing a request on every keystroke; segmented buttons and the
+// shuttle checkbox save immediately since a single click is the whole edit.
+
+function collectBrokerPayload() {
   const nameRaw = document.getElementById('brokerName').value.trim();
   const email = document.getElementById('brokerEmailInput').value.trim();
-  if (!nameRaw || !email) return flash(errEl, 'Укажите имя и email.', true);
 
   let lastName = '';
   let firstName = nameRaw;
@@ -1103,7 +1129,7 @@ document.getElementById('brokerModalSaveBtn').addEventListener('click', async ()
   const ratingBtn = document.querySelector('#brokerRatingPicker .segmented-btn.active');
   const days = [...document.querySelectorAll('#brokerDaysPicker .segmented-btn.active')].map((b) => b.dataset.day);
 
-  const payload = {
+  return {
     firstName,
     lastName,
     email,
@@ -1116,18 +1142,60 @@ document.getElementById('brokerModalSaveBtn').addEventListener('click', async ()
     birthday: document.getElementById('brokerBirthday').value || null,
     notes: document.getElementById('brokerNotes').value.trim(),
   };
+}
 
+let brokerAutoSaveTimer = null;
+
+async function saveBrokerAuto() {
+  const errEl = document.getElementById('brokerModalError');
+  const statusEl = document.getElementById('brokerModalSaveStatus');
+  hide(errEl);
+  const payload = collectBrokerPayload();
+  if (!payload.firstName || !payload.email) {
+    // Not enough to save yet (new broker with no name/email typed in) — quietly wait.
+    statusEl.textContent = '';
+    return;
+  }
+
+  statusEl.textContent = 'Сохранение…';
   try {
     if (editingBrokerId) {
       await api(`/api/email/brokers/${editingBrokerId}`, { method: 'PUT', body: JSON.stringify(payload) });
     } else {
-      await api('/api/email/brokers', { method: 'POST', body: JSON.stringify(payload) });
+      // First time enough fields are filled in for a brand-new broker: create
+      // it, then keep editing that same record for every field after.
+      const created = await api('/api/email/brokers', { method: 'POST', body: JSON.stringify(payload) });
+      editingBrokerId = created.id;
+      document.getElementById('brokerModalTitle').textContent = 'Редактировать брокера';
     }
-    document.getElementById('brokerModalOverlay').style.display = 'none';
+    statusEl.textContent = 'Сохранено ✓';
     await refreshBrokers();
   } catch (err) {
+    statusEl.textContent = '';
     flash(errEl, err.message, true);
   }
+}
+
+function scheduleBrokerAutoSave() {
+  clearTimeout(brokerAutoSaveTimer);
+  document.getElementById('brokerModalSaveStatus').textContent = '';
+  brokerAutoSaveTimer = setTimeout(saveBrokerAuto, 600);
+}
+
+['brokerName', 'brokerEmailInput', 'brokerHoursFrom', 'brokerHoursTo', 'brokerBirthday', 'brokerNotes'].forEach((id) => {
+  document.getElementById(id).addEventListener('input', scheduleBrokerAutoSave);
+});
+document.querySelectorAll(
+  '#brokerShiftPicker .segmented-btn, #brokerRatingPicker .segmented-btn, #brokerDaysPicker .segmented-btn'
+).forEach((btn) => {
+  btn.addEventListener('click', () => {
+    clearTimeout(brokerAutoSaveTimer);
+    saveBrokerAuto();
+  });
+});
+document.getElementById('brokerShuttle').addEventListener('change', () => {
+  clearTimeout(brokerAutoSaveTimer);
+  saveBrokerAuto();
 });
 
 // ---- CSV import ----

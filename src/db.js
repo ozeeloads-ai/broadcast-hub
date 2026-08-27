@@ -152,11 +152,6 @@ ensureColumn('brokers', 'is_online', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('brokers', 'birthday', 'TEXT');
 ensureColumn('brokers', 'notes', 'TEXT');
 
-// Lets a user's outgoing broadcasts automatically carry their Telegram
-// handle (e.g. "@WaLllyWest"), so messages sent through the site still read
-// as coming personally from them.
-ensureColumn('telegram_accounts', 'signature', 'TEXT');
-
 // Tracks which Telegram message a cap-list entry came from, so a Cap List
 // Puller history-scan doesn't create duplicate entries for a message the
 // live listener already captured, or on a re-pull of an overlapping window.
