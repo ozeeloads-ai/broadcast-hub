@@ -57,9 +57,13 @@ function disconnect(userId) {
   db.prepare('DELETE FROM email_accounts WHERE user_id = ?').run(userId);
 }
 
-async function sendToBrokers(userId, brokerIds, subject, text) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function sendToBrokers(userId, brokerIds, subject, text, delaySeconds = 0) {
   const account = db.prepare('SELECT * FROM email_accounts WHERE user_id = ?').get(userId);
   if (!account) throw new Error('Сначала подключите свою почту.');
+
+  const delayMs = Math.min(5, Math.max(0, Number(delaySeconds) || 0)) * 1000;
 
   const brokers = db
     .prepare(`SELECT * FROM brokers WHERE user_id = ? AND id IN (${brokerIds.map(() => '?').join(',')})`)
@@ -67,7 +71,9 @@ async function sendToBrokers(userId, brokerIds, subject, text) {
 
   const transporter = buildTransport(account);
   const results = [];
-  for (const broker of brokers) {
+  for (let i = 0; i < brokers.length; i++) {
+    const broker = brokers[i];
+    if (i > 0 && delayMs > 0) await sleep(delayMs);
     try {
       await transporter.sendMail({
         from: account.email,

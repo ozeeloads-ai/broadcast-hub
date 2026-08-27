@@ -560,15 +560,20 @@ const HARD_PULL_EXCLUDED_USERNAMES = [
   'Eddy_x993',
 ];
 
-async function hardPullGroups(userId, groupIds) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function hardPullGroups(userId, groupIds, delaySeconds = 0) {
   const client = await getClient(userId);
+  const delayMs = Math.min(5, Math.max(0, Number(delaySeconds) || 0)) * 1000;
   const excludeSet = new Set(HARD_PULL_EXCLUDED_USERNAMES.map((u) => u.replace(/^@/, '').toLowerCase()));
   const groups = db
     .prepare(`SELECT * FROM telegram_groups WHERE user_id = ? AND id IN (${groupIds.map(() => '?').join(',')})`)
     .all(userId, ...groupIds);
 
   const results = [];
-  for (const group of groups) {
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i];
+    if (i > 0 && delayMs > 0) await sleep(delayMs);
     try {
       if (group.peer_type === 'user') {
         throw new Error('Hard Pull доступен только для групп и каналов.');

@@ -52,14 +52,14 @@ router.delete('/brokers/:id', (req, res) => {
 
 router.post('/send', async (req, res) => {
   try {
-    const { brokerIds, subject, text } = req.body || {};
+    const { brokerIds, subject, text, delaySeconds } = req.body || {};
     if (!Array.isArray(brokerIds) || brokerIds.length === 0) {
       return res.status(400).json({ error: 'Выберите хотя бы одного брокера.' });
     }
     if (!subject || !text) {
       return res.status(400).json({ error: 'Заполните тему и текст письма.' });
     }
-    const results = await mailer.sendToBrokers(req.session.userId, brokerIds, subject, text);
+    const results = await mailer.sendToBrokers(req.session.userId, brokerIds, subject, text, delaySeconds);
     res.json({ results });
   } catch (err) {
     res.status(400).json({ error: err.message });

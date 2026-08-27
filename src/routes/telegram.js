@@ -121,11 +121,11 @@ router.get('/hardpull/template', (req, res) => {
 
 router.post('/hardpull', async (req, res) => {
   try {
-    const { groupIds } = req.body || {};
+    const { groupIds, delaySeconds } = req.body || {};
     if (!Array.isArray(groupIds) || groupIds.length === 0) {
       return res.status(400).json({ error: 'Выберите хотя бы одну группу.' });
     }
-    const results = await tg.hardPullGroups(req.session.userId, groupIds);
+    const results = await tg.hardPullGroups(req.session.userId, groupIds, delaySeconds);
     res.json({ results });
   } catch (err) {
     res.status(400).json({ error: err.message });

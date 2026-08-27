@@ -61,6 +61,44 @@ function setupCollapsible(headerId, bodyId, hintId) {
 setupCollapsible('groupsCardToggle', 'groupsCardBody', 'groupsCardToggleHint');
 setupCollapsible('mailCardToggle', 'mailCardBody', 'mailCardToggleHint');
 
+// ---------- US time zone clocks ----------
+
+function updateTimeZoneClocks() {
+  const now = new Date();
+  document.querySelectorAll('.tz-card').forEach((card) => {
+    const tz = card.dataset.tz;
+
+    const timeParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    }).formatToParts(now);
+
+    const hour = timeParts.find((p) => p.type === 'hour')?.value || '--';
+    const minute = timeParts.find((p) => p.type === 'minute')?.value || '--';
+    const ampm = (timeParts.find((p) => p.type === 'dayPeriod')?.value || '').toUpperCase();
+
+    const dateParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    }).formatToParts(now);
+
+    const weekday = dateParts.find((p) => p.type === 'weekday')?.value || '';
+    const month = dateParts.find((p) => p.type === 'month')?.value || '';
+    const day = dateParts.find((p) => p.type === 'day')?.value || '';
+
+    card.querySelector('.tz-hm').textContent = `${hour}:${minute}`;
+    card.querySelector('.tz-ampm').textContent = ampm;
+    card.querySelector('.tz-date').textContent = `${weekday} ${month} ${day}`.toUpperCase();
+  });
+}
+
+updateTimeZoneClocks();
+setInterval(updateTimeZoneClocks, 1000);
+
 // ================= TG SENDER =================
 
 let groups = [];
@@ -456,10 +494,12 @@ async function hardPullGroups(groupIds) {
   hide(errEl); hide(okEl);
   if (!groupIds.length) return flash(errEl, 'Выберите хотя бы одну группу.', true);
 
+  const delaySeconds = Number(document.getElementById('hardPullDelay').value) || 0;
+
   try {
     const { results } = await api('/api/telegram/hardpull', {
       method: 'POST',
-      body: JSON.stringify({ groupIds }),
+      body: JSON.stringify({ groupIds, delaySeconds }),
     });
     const failed = results.filter((r) => !r.ok);
     if (failed.length) {
@@ -693,10 +733,12 @@ async function sendMail(brokerIds) {
   if (!subject || !text) return flash(errEl, 'Заполните тему и текст письма.', true);
   if (!brokerIds.length) return flash(errEl, 'Выберите хотя бы одного брокера.', true);
 
+  const delaySeconds = Number(document.getElementById('mailSendDelay').value) || 0;
+
   try {
     const { results } = await api('/api/email/send', {
       method: 'POST',
-      body: JSON.stringify({ brokerIds, subject, text }),
+      body: JSON.stringify({ brokerIds, subject, text, delaySeconds }),
     });
     const failed = results.filter((r) => !r.ok);
     if (failed.length) {

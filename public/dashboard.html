@@ -16,6 +16,37 @@
   </div>
 </div>
 
+<div class="tz-bar" id="tzBar">
+  <div class="tz-card" data-tz="America/Los_Angeles" style="--tz-color:#2fb6c9;">
+    <div class="tz-card-header">Pacific time</div>
+    <div class="tz-card-body">
+      <div class="tz-time"><span class="tz-hm">--:--</span><span class="tz-ampm">--</span></div>
+      <div class="tz-date">--</div>
+    </div>
+  </div>
+  <div class="tz-card" data-tz="America/Denver" style="--tz-color:#e2685c;">
+    <div class="tz-card-header">Mountain time</div>
+    <div class="tz-card-body">
+      <div class="tz-time"><span class="tz-hm">--:--</span><span class="tz-ampm">--</span></div>
+      <div class="tz-date">--</div>
+    </div>
+  </div>
+  <div class="tz-card" data-tz="America/Chicago" style="--tz-color:#e0b23e;">
+    <div class="tz-card-header">Central time</div>
+    <div class="tz-card-body">
+      <div class="tz-time"><span class="tz-hm">--:--</span><span class="tz-ampm">--</span></div>
+      <div class="tz-date">--</div>
+    </div>
+  </div>
+  <div class="tz-card" data-tz="America/New_York" style="--tz-color:#33b596;">
+    <div class="tz-card-header">Eastern time</div>
+    <div class="tz-card-body">
+      <div class="tz-time"><span class="tz-hm">--:--</span><span class="tz-ampm">--</span></div>
+      <div class="tz-date">--</div>
+    </div>
+  </div>
+</div>
+
 <div class="tabs">
   <button class="tab-btn active" data-tab="tg">TG Sender</button>
   <button class="tab-btn" data-tab="mail">Email Sender</button>
@@ -195,6 +226,14 @@
     <label>Текст письма</label>
     <textarea id="mailBody" placeholder="Текст письма..."></textarea>
 
+    <div class="row" style="margin-top:14px;">
+      <div style="flex:0;">
+        <label style="margin:0;">Задержка между письмами</label>
+        <input id="mailSendDelay" type="number" min="0" max="5" step="0.5" value="1" style="width:90px;" />
+      </div>
+      <div style="flex:0; align-self:flex-end; padding-bottom:10px;"><span class="muted">сек. (0–5)</span></div>
+    </div>
+
     <div class="toolbar" style="margin-top:16px;">
       <button class="btn-secondary" id="selectAllBrokersSendBtn">Выделить всех брокеров</button>
       <button class="btn-primary" id="sendToSelectedBrokersBtn">Отправить выбранным</button>
@@ -322,6 +361,14 @@
     <div class="success-msg" id="capListRequestSuccess"></div>
 
     <p class="hint" style="margin-top:20px;">Hard Pull — тегнет всех участников группы (кроме исключённых из списка) сообщением: «<em id="hardPullTemplateText">Please share cap list , lets books some loads</em>».</p>
+
+    <div class="row" style="margin-bottom:12px;">
+      <div style="flex:0;">
+        <label style="margin:0;">Задержка между группами</label>
+        <input id="hardPullDelay" type="number" min="0" max="5" step="0.5" value="1" style="width:90px;" />
+      </div>
+      <div style="flex:0; align-self:flex-end; padding-bottom:10px;"><span class="muted">сек. (0–5)</span></div>
+    </div>
 
     <div class="toolbar">
       <button class="btn-danger" id="hardPullSelectedBtn">Hard Pull — выбранным</button>
