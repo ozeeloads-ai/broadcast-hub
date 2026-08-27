@@ -45,6 +45,22 @@ document.querySelectorAll('.tab-btn').forEach((btn) => {
   });
 });
 
+// ---------- collapsible cards ----------
+
+function setupCollapsible(headerId, bodyId, hintId) {
+  const header = document.getElementById(headerId);
+  const body = document.getElementById(bodyId);
+  const hint = document.getElementById(hintId);
+  if (!header || !body || !hint) return;
+  header.addEventListener('click', () => {
+    const collapsed = body.classList.toggle('collapsed');
+    hint.textContent = collapsed ? 'Показать ▾' : 'Скрыть ▴';
+  });
+}
+
+setupCollapsible('groupsCardToggle', 'groupsCardBody', 'groupsCardToggleHint');
+setupCollapsible('mailCardToggle', 'mailCardBody', 'mailCardToggleHint');
+
 // ================= TG SENDER =================
 
 let groups = [];
@@ -167,6 +183,106 @@ document.getElementById('addGroupBtn').addEventListener('click', async () => {
 
 document.getElementById('selectAllGroups').addEventListener('change', (e) => {
   document.querySelectorAll('.group-checkbox').forEach((cb) => (cb.checked = e.target.checked));
+});
+
+// ---------- Telegram dialogs picker (browse existing chats) ----------
+
+let dialogsKind = 'groups';
+let allDialogs = [];
+
+function setDialogsKind(kind) {
+  dialogsKind = kind;
+  document.getElementById('dialogsKindGroups').classList.toggle('active', kind === 'groups');
+  document.getElementById('dialogsKindPrivate').classList.toggle('active', kind === 'private');
+  loadDialogs();
+}
+
+async function loadDialogs() {
+  const errEl = document.getElementById('dialogsError');
+  const okEl = document.getElementById('dialogsSuccess');
+  hide(errEl); hide(okEl);
+  const btn = document.getElementById('refreshDialogsBtn');
+  btn.disabled = true;
+  try {
+    allDialogs = await api(`/api/telegram/dialogs?kind=${dialogsKind}`);
+    document.getElementById('dialogsSearch').value = '';
+    renderDialogsList();
+  } catch (err) {
+    allDialogs = [];
+    renderDialogsList();
+    flash(errEl, err.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderDialogsList() {
+  const search = document.getElementById('dialogsSearch').value.trim().toLowerCase();
+  const listEl = document.getElementById('dialogsList');
+  const emptyEl = document.getElementById('dialogsEmptyMsg');
+  const countEl = document.getElementById('dialogsFoundCount');
+
+  const filtered = search
+    ? allDialogs.filter((d) => (d.title || '').toLowerCase().includes(search))
+    : allDialogs;
+
+  listEl.innerHTML = '';
+
+  if (!allDialogs.length) {
+    emptyEl.textContent = 'Ничего не загружено. Нажмите «Обновить список», чтобы загрузить чаты из вашего Telegram.';
+    show(emptyEl);
+    hide(countEl);
+    return;
+  }
+
+  countEl.textContent = `Найдено: ${filtered.length} из ${allDialogs.length}`;
+  show(countEl);
+
+  if (!filtered.length) {
+    emptyEl.textContent = 'Ничего не найдено по вашему запросу.';
+    show(emptyEl);
+    return;
+  }
+  hide(emptyEl);
+
+  for (const d of filtered) {
+    const label = document.createElement('label');
+    label.innerHTML = `<input type="checkbox" class="dialog-checkbox" value="${d.id}" /><span>${escapeHtml(d.title || '(без названия)')}</span>`;
+    listEl.appendChild(label);
+  }
+}
+
+document.getElementById('dialogsKindGroups').addEventListener('click', () => setDialogsKind('groups'));
+document.getElementById('dialogsKindPrivate').addEventListener('click', () => setDialogsKind('private'));
+document.getElementById('refreshDialogsBtn').addEventListener('click', loadDialogs);
+document.getElementById('dialogsSearch').addEventListener('input', renderDialogsList);
+
+document.getElementById('selectAllDialogsBtn').addEventListener('click', () => {
+  document.querySelectorAll('.dialog-checkbox').forEach((cb) => (cb.checked = true));
+});
+
+document.getElementById('importDialogsBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('dialogsError');
+  const okEl = document.getElementById('dialogsSuccess');
+  hide(errEl); hide(okEl);
+  const ids = [...document.querySelectorAll('.dialog-checkbox:checked')].map((cb) => cb.value);
+  if (!ids.length) return flash(errEl, 'Выберите хотя бы один чат.', true);
+  try {
+    const { results } = await api('/api/telegram/dialogs/import', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    const failed = results.filter((r) => !r.ok);
+    const okCount = results.length - failed.length;
+    if (failed.length) {
+      flash(errEl, `Добавлено: ${okCount}. Ошибки: ${failed.map((f) => f.error).join('; ')}`, true);
+    } else {
+      flash(okEl, `Добавлено чатов: ${okCount}. Их можно найти в разделе «Группы (управление вручную)».`);
+    }
+    await refreshGroups();
+  } catch (err) {
+    flash(errEl, err.message, true);
+  }
 });
 
 document.getElementById('selectAllGroupsSendBtn').addEventListener('click', () => {
