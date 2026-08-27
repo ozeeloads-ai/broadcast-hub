@@ -12,6 +12,10 @@ const telegramManager = require('./src/services/telegramManager');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+// Cloud platforms like Railway proxy to 0.0.0.0 by default (leave HOST unset
+// there). On a VPS behind nginx, set HOST=127.0.0.1 in .env so the app is
+// only reachable through the reverse proxy, not directly on its own port.
+const HOST = process.env.HOST || '0.0.0.0';
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -40,8 +44,8 @@ app.get('/dashboard', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Broadcast Hub listening on http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Broadcast Hub listening on http://${HOST}:${PORT}`);
   scheduler.start();
 
   // Reconnect every user's Telegram client on boot so the Cap List listener
