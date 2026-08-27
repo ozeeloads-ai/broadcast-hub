@@ -273,8 +273,7 @@
 
     <div class="toolbar" style="margin-top:16px;">
       <button class="btn-secondary" id="selectAllBrokersSendBtn">Выделить всех брокеров</button>
-      <button class="btn-primary" id="sendToSelectedBrokersBtn">Отправить выбранным</button>
-      <button class="btn-success" id="sendToAllBrokersBtn">Отправить всем</button>
+      <button class="btn-primary" id="sendMailBtn">Отправить</button>
     </div>
 
     <div class="error-msg" id="mailSendError"></div>
@@ -324,11 +323,17 @@
 
     <div class="broker-columns">
       <div class="broker-column">
-        <div class="broker-column-header">☀️ DAY <span class="count-badge" id="brokerCountDay">0</span></div>
+        <div class="broker-column-header">
+          <input type="checkbox" class="column-select-all" data-column="day" title="Выделить всех DAY" />
+          ☀️ DAY <span class="count-badge" id="brokerCountDay">0</span>
+        </div>
         <div id="brokerListDay"></div>
       </div>
       <div class="broker-column">
-        <div class="broker-column-header">🌙 NIGHT <span class="count-badge" id="brokerCountNight">0</span></div>
+        <div class="broker-column-header">
+          <input type="checkbox" class="column-select-all" data-column="night" title="Выделить всех NIGHT" />
+          🌙 NIGHT <span class="count-badge" id="brokerCountNight">0</span>
+        </div>
         <div id="brokerListNight"></div>
       </div>
     </div>
@@ -483,6 +488,15 @@
 
     <div class="error-msg" id="capListRequestError"></div>
     <div class="success-msg" id="capListRequestSuccess"></div>
+
+    <p class="hint" style="margin-top:20px;">Cap List Puller — запрашивает cap list у всех групп прямо сейчас и дальше повторяет это автоматически каждые 1–3 часа, пока вы не остановите.</p>
+    <div class="toolbar">
+      <button class="btn-secondary autopull-btn" data-hours="1">Pull 1 hr</button>
+      <button class="btn-secondary autopull-btn" data-hours="2">Pull 2 hrs</button>
+      <button class="btn-secondary autopull-btn" data-hours="3">Pull 3 hrs</button>
+      <button class="btn-danger" id="autopullStopBtn" style="display:none;">Остановить автопул</button>
+    </div>
+    <p class="muted" id="autopullStatus"></p>
   </div>
 
   <div class="card">

@@ -410,19 +410,100 @@ const US_STATE_CODES = new Set([
   'VA', 'WA', 'WV', 'WI', 'WY', 'DC',
 ]);
 
+// Bare city names/nicknames dispatchers commonly type with no state code at
+// all (e.g. "Vegas", "Las Vegas"). Deliberately excludes 2-letter nicknames
+// like "la" that collide with a real US state code (Louisiana) — those stay
+// state-code-only and require the team/solo keyword to avoid false positives.
+const CITY_LOOKUP = {
+  'las vegas': { city: 'Las Vegas', state: 'NV' },
+  vegas: { city: 'Las Vegas', state: 'NV' },
+  'los angeles': { city: 'Los Angeles', state: 'CA' },
+  'new york': { city: 'New York', state: 'NY' },
+  nyc: { city: 'New York', state: 'NY' },
+  chicago: { city: 'Chicago', state: 'IL' },
+  chi: { city: 'Chicago', state: 'IL' },
+  chitown: { city: 'Chicago', state: 'IL' },
+  houston: { city: 'Houston', state: 'TX' },
+  dallas: { city: 'Dallas', state: 'TX' },
+  dfw: { city: 'Dallas', state: 'TX' },
+  'san antonio': { city: 'San Antonio', state: 'TX' },
+  phoenix: { city: 'Phoenix', state: 'AZ' },
+  philadelphia: { city: 'Philadelphia', state: 'PA' },
+  philly: { city: 'Philadelphia', state: 'PA' },
+  'san diego': { city: 'San Diego', state: 'CA' },
+  'san jose': { city: 'San Jose', state: 'CA' },
+  austin: { city: 'Austin', state: 'TX' },
+  jacksonville: { city: 'Jacksonville', state: 'FL' },
+  'fort worth': { city: 'Fort Worth', state: 'TX' },
+  columbus: { city: 'Columbus', state: 'OH' },
+  charlotte: { city: 'Charlotte', state: 'NC' },
+  indianapolis: { city: 'Indianapolis', state: 'IN' },
+  seattle: { city: 'Seattle', state: 'WA' },
+  denver: { city: 'Denver', state: 'CO' },
+  'oklahoma city': { city: 'Oklahoma City', state: 'OK' },
+  okc: { city: 'Oklahoma City', state: 'OK' },
+  nashville: { city: 'Nashville', state: 'TN' },
+  'el paso': { city: 'El Paso', state: 'TX' },
+  boston: { city: 'Boston', state: 'MA' },
+  portland: { city: 'Portland', state: 'OR' },
+  memphis: { city: 'Memphis', state: 'TN' },
+  detroit: { city: 'Detroit', state: 'MI' },
+  motown: { city: 'Detroit', state: 'MI' },
+  atlanta: { city: 'Atlanta', state: 'GA' },
+  atl: { city: 'Atlanta', state: 'GA' },
+  miami: { city: 'Miami', state: 'FL' },
+  'kansas city': { city: 'Kansas City', state: 'MO' },
+  kc: { city: 'Kansas City', state: 'MO' },
+  'new orleans': { city: 'New Orleans', state: 'LA' },
+  nola: { city: 'New Orleans', state: 'LA' },
+  'san francisco': { city: 'San Francisco', state: 'CA' },
+  sf: { city: 'San Francisco', state: 'CA' },
+  louisville: { city: 'Louisville', state: 'KY' },
+  baltimore: { city: 'Baltimore', state: 'MD' },
+  milwaukee: { city: 'Milwaukee', state: 'WI' },
+  albuquerque: { city: 'Albuquerque', state: 'NM' },
+  tucson: { city: 'Tucson', state: 'AZ' },
+  sacramento: { city: 'Sacramento', state: 'CA' },
+};
+
 function parseCapListLine(line) {
   const trimmed = line.trim().replace(/[.;]+$/, '');
   if (!trimmed || trimmed.length > 80) return null;
 
-  const m = trimmed.match(/^(?:(.+?)[,]?\s+)?([A-Za-z]{2})\s+(team|solo)\s*$/i);
-  if (!m) return null;
+  // "<city> <ST> [team|solo]" — real city text plus a valid 2-letter state
+  // code. When the keyword is missing but there IS real city text, dispatchers
+  // overwhelmingly mean solo, so default to it.
+  let m = trimmed.match(/^(.+?)[,]?\s+([A-Za-z]{2})\s+(team|solo)\s*$/i);
+  if (m && US_STATE_CODES.has(m[2].toUpperCase())) {
+    const city = m[1].replace(/,\s*$/, '').trim();
+    return { city, state: m[2].toUpperCase(), truckType: m[3].toLowerCase() };
+  }
 
-  const state = m[2].toUpperCase();
-  if (!US_STATE_CODES.has(state)) return null;
+  m = trimmed.match(/^(.+?)[,]?\s+([A-Za-z]{2})\s*$/i);
+  if (m && US_STATE_CODES.has(m[2].toUpperCase())) {
+    const city = m[1].replace(/,\s*$/, '').trim();
+    if (city) return { city, state: m[2].toUpperCase(), truckType: 'solo' };
+  }
 
-  const city = (m[1] || '').replace(/,\s*$/, '').trim();
-  const truckType = m[3].toLowerCase();
-  return { city, state, truckType };
+  // A bare state code with no city text keeps the keyword mandatory — common
+  // short words like "hi"/"ok"/"me"/"in" are also valid state codes, and
+  // without a keyword there'd be no way to tell them apart from chatter.
+  m = trimmed.match(/^([A-Za-z]{2})\s+(team|solo)\s*$/i);
+  if (m && US_STATE_CODES.has(m[1].toUpperCase())) {
+    return { city: '', state: m[1].toUpperCase(), truckType: m[2].toLowerCase() };
+  }
+
+  // A known city name or short nickname with no state code at all (e.g.
+  // "Vegas", "Las Vegas", "Philly team"), resolved via the lookup table above.
+  m = trimmed.match(/^([A-Za-z .]+?)\s*(?:(team|solo))?\s*$/i);
+  if (m) {
+    const known = CITY_LOOKUP[m[1].trim().toLowerCase()];
+    if (known) {
+      return { city: known.city, state: known.state, truckType: m[2] ? m[2].toLowerCase() : 'solo' };
+    }
+  }
+
+  return null;
 }
 
 function attachCapListListener(userId, client) {
@@ -546,6 +627,78 @@ function clearCapList(userId) {
   db.prepare('DELETE FROM cap_list_entries WHERE user_id = ?').run(userId);
 }
 
+// ---- Cap List Puller: auto-repeat the cap-list request every 1-3 hours ----
+
+function getAutoPullSetting(userId) {
+  return db.prepare('SELECT * FROM cap_list_auto_pull WHERE user_id = ?').get(userId) || null;
+}
+
+async function setAutoPull(userId, intervalHours) {
+  const hours = Number(intervalHours);
+  if (![1, 2, 3].includes(hours)) {
+    throw new Error('Интервал должен быть 1, 2 или 3 часа.');
+  }
+
+  const groups = listGroups(userId);
+  if (!groups.length) {
+    throw new Error('Сначала добавьте хотя бы одну группу.');
+  }
+
+  // Pull right now, then schedule the next automatic repeat.
+  await sendToGroups(userId, groups.map((g) => g.id), CAP_LIST_REQUEST_TEXT);
+
+  const nowIso = new Date().toISOString();
+  const nextPullAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+
+  db.prepare(
+    `INSERT INTO cap_list_auto_pull (user_id, interval_hours, enabled, last_pulled_at, next_pull_at)
+     VALUES (@userId, @hours, 1, @now, @next)
+     ON CONFLICT(user_id) DO UPDATE SET
+       interval_hours = excluded.interval_hours, enabled = 1,
+       last_pulled_at = excluded.last_pulled_at, next_pull_at = excluded.next_pull_at`
+  ).run({ userId, hours, now: nowIso, next: nextPullAt });
+
+  return getAutoPullSetting(userId);
+}
+
+function stopAutoPull(userId) {
+  db.prepare('UPDATE cap_list_auto_pull SET enabled = 0 WHERE user_id = ?').run(userId);
+}
+
+// Called periodically by the scheduler. Compares next_pull_at in JS (rather
+// than via SQLite's datetime('now')) so we don't have to worry about ISO
+// ("...T...Z") vs SQLite ("YYYY-MM-DD HH:MM:SS") string-format mismatches.
+async function runDueAutoPulls() {
+  const rows = db.prepare('SELECT * FROM cap_list_auto_pull WHERE enabled = 1').all();
+  const now = Date.now();
+
+  for (const row of rows) {
+    if (!row.next_pull_at) continue;
+    const iso = row.next_pull_at.includes('T') ? row.next_pull_at : row.next_pull_at.replace(' ', 'T') + 'Z';
+    const nextAt = new Date(iso).getTime();
+    if (Number.isNaN(nextAt) || nextAt > now) continue;
+
+    try {
+      const groups = listGroups(row.user_id);
+      if (groups.length) {
+        await sendToGroups(row.user_id, groups.map((g) => g.id), CAP_LIST_REQUEST_TEXT);
+      }
+      const nowIso = new Date().toISOString();
+      const nextPullAt = new Date(Date.now() + row.interval_hours * 60 * 60 * 1000).toISOString();
+      db.prepare('UPDATE cap_list_auto_pull SET last_pulled_at = ?, next_pull_at = ? WHERE user_id = ?').run(
+        nowIso,
+        nextPullAt,
+        row.user_id
+      );
+    } catch (err) {
+      // Leave next_pull_at as-is so the scheduler retries this user again on
+      // its next tick instead of silently going quiet until someone notices
+      // (e.g. their Telegram session expired and needs reconnecting).
+      console.error(`[caplist] auto-pull failed for user ${row.user_id}:`, err.message);
+    }
+  }
+}
+
 module.exports = {
   startLogin,
   submitCode,
@@ -567,5 +720,10 @@ module.exports = {
   listCapListLog,
   capListCounts,
   clearCapList,
+  getAutoPullSetting,
+  setAutoPull,
+  stopAutoPull,
+  runDueAutoPulls,
+  parseCapListLine,
   CAP_LIST_REQUEST_TEXT,
 };

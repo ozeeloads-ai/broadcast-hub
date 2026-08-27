@@ -561,6 +561,62 @@ document.getElementById('capListSearch').addEventListener('input', () => {
   capListSearchTimer = setTimeout(loadCapList, 350);
 });
 
+// Keep the cap list showing fresh data on its own, without needing a manual
+// "Обновить" click — covers both the Puller's auto-repeats and any new
+// incoming group messages the passive listener picks up.
+setInterval(loadCapList, 60 * 1000);
+
+// ---- Cap List Puller (auto-repeat every 1-3 hours) ----
+
+function formatClockTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleString();
+}
+
+async function refreshAutoPullStatus() {
+  let status;
+  try {
+    status = await api('/api/telegram/caplist/autopull');
+  } catch {
+    return;
+  }
+  const statusEl = document.getElementById('autopullStatus');
+  const stopBtn = document.getElementById('autopullStopBtn');
+  if (status.enabled) {
+    const next = formatClockTime(status.nextPullAt);
+    statusEl.textContent = `Автопул включён: каждые ${status.intervalHours} ч. ${next ? `Следующий запрос: ${next}` : ''}`;
+    show(stopBtn);
+  } else {
+    statusEl.textContent = 'Автопул выключен.';
+    hide(stopBtn);
+  }
+}
+
+document.querySelectorAll('.autopull-btn').forEach((btn) => {
+  btn.addEventListener('click', async () => {
+    const errEl = document.getElementById('capListRequestError');
+    const okEl = document.getElementById('capListRequestSuccess');
+    hide(errEl); hide(okEl);
+    try {
+      await api('/api/telegram/caplist/autopull', {
+        method: 'POST',
+        body: JSON.stringify({ intervalHours: Number(btn.dataset.hours) }),
+      });
+      flash(okEl, `Cap List запрошен сейчас, дальше — автоматически каждые ${btn.dataset.hours} ч.`);
+      await refreshAutoPullStatus();
+    } catch (err) {
+      flash(errEl, err.message, true);
+    }
+  });
+});
+
+document.getElementById('autopullStopBtn').addEventListener('click', async () => {
+  await api('/api/telegram/caplist/autopull/stop', { method: 'POST' });
+  await refreshAutoPullStatus();
+});
+
 // ================= DISTANCE =================
 
 let lastDistanceResult = null;
@@ -754,7 +810,7 @@ function renderBrokerRow(b) {
     <div class="broker-row-main">
       <input type="checkbox" class="broker-checkbox" value="${b.id}" />
       <span class="broker-online-dot ${b.isOnline ? 'online' : ''}"></span>
-      <span class="broker-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+      <span class="broker-name" data-id="${b.id}" title="Нажмите, чтобы ${currentUser.isAdmin ? 'редактировать' : 'посмотреть детали'}: ${escapeHtml(name)}">${escapeHtml(name)}</span>
       ${b.isNew ? '<span class="broker-badge-new">NEW</span>' : ''}
       <span class="broker-badge-pct ${pctClass(b.percentage)}">${b.percentage}%</span>
       ${starsHtml(b.rating)}
@@ -773,11 +829,11 @@ function renderBrokerRow(b) {
       </dl>
       ${
         currentUser.isAdmin
-          ? `<div class="toolbar">
+          ? `<p class="muted" style="margin:6px 0 0;">Нажмите на имя брокера выше, чтобы отредактировать.</p>
+      <div class="toolbar">
         <button class="btn-secondary toggle-online-btn" data-id="${b.id}" data-online="${b.isOnline ? 0 : 1}">${
               b.isOnline ? 'Отметить оффлайн' : 'Отметить онлайн'
             }</button>
-        <button class="btn-secondary edit-broker-btn" data-id="${b.id}">Редактировать</button>
         <button class="btn-danger remove-broker-btn" data-id="${b.id}">Удалить</button>
       </div>`
           : ''
@@ -799,6 +855,15 @@ function wireBrokerRowEvents() {
       document.getElementById('mailSubject').scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
   });
+  document.querySelectorAll('.broker-name').forEach((el) => {
+    el.addEventListener('click', () => {
+      if (currentUser.isAdmin) {
+        openBrokerModal(brokers.find((b) => b.id === Number(el.dataset.id)));
+      } else {
+        document.getElementById(`brokerDetails-${el.dataset.id}`).classList.toggle('open');
+      }
+    });
+  });
   document.querySelectorAll('.toggle-online-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
       await api(`/api/email/brokers/${btn.dataset.id}/online`, {
@@ -807,9 +872,6 @@ function wireBrokerRowEvents() {
       });
       await refreshBrokers();
     });
-  });
-  document.querySelectorAll('.edit-broker-btn').forEach((btn) => {
-    btn.addEventListener('click', () => openBrokerModal(brokers.find((b) => b.id === Number(btn.dataset.id))));
   });
   document.querySelectorAll('.remove-broker-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -1013,6 +1075,13 @@ document.getElementById('selectAllBrokersSendBtn').addEventListener('click', () 
   document.querySelectorAll('.broker-checkbox').forEach((cb) => (cb.checked = true));
 });
 
+document.querySelectorAll('.column-select-all').forEach((cb) => {
+  cb.addEventListener('change', () => {
+    const listEl = document.getElementById(cb.dataset.column === 'day' ? 'brokerListDay' : 'brokerListNight');
+    listEl.querySelectorAll('.broker-checkbox').forEach((rowCb) => (rowCb.checked = cb.checked));
+  });
+});
+
 function getSelectedBrokerIds() {
   return [...document.querySelectorAll('.broker-checkbox:checked')].map((cb) => Number(cb.value));
 }
@@ -1047,8 +1116,7 @@ async function sendMail(brokerIds) {
   }
 }
 
-document.getElementById('sendToSelectedBrokersBtn').addEventListener('click', () => sendMail(getSelectedBrokerIds()));
-document.getElementById('sendToAllBrokersBtn').addEventListener('click', () => sendMail(brokers.map((b) => b.id)));
+document.getElementById('sendMailBtn').addEventListener('click', () => sendMail(getSelectedBrokerIds()));
 
 // ================= ADMIN =================
 
@@ -1121,5 +1189,13 @@ document.getElementById('addUserBtn').addEventListener('click', async () => {
 // ---------- init ----------
 
 (async function init() {
-  await Promise.all([refreshTgStatus(), refreshGroups(), refreshMessages(), refreshMailboxes(), refreshBrokers(), loadCapList()]);
+  await Promise.all([
+    refreshTgStatus(),
+    refreshGroups(),
+    refreshMessages(),
+    refreshMailboxes(),
+    refreshBrokers(),
+    loadCapList(),
+    refreshAutoPullStatus(),
+  ]);
 })();

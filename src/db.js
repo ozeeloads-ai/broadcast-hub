@@ -101,6 +101,16 @@ CREATE TABLE IF NOT EXISTS broker_send_log (
 );
 CREATE INDEX IF NOT EXISTS idx_broker_send_log_broker ON broker_send_log(broker_id);
 
+-- Cap List Puller: lets a user ask the system to auto-repeat the cap-list
+-- request to all their groups every N hours until stopped.
+CREATE TABLE IF NOT EXISTS cap_list_auto_pull (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  interval_hours INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_pulled_at TEXT,
+  next_pull_at TEXT
+);
+
 -- Cap List: incoming Telegram messages from monitored groups get scanned for
 -- lines like "Las Vegas NV Solo" / "CA Team" and logged here so dispatchers
 -- can see, per group, the latest truck availability (city/state + team/solo).
@@ -184,30 +194,42 @@ function ensureAdminUser() {
 
   const explicitPassword = (process.env.ADMIN_PASSWORD || '').trim();
 
-  if (user) {
-    if (user.is_admin) {
-      // Already bootstrapped in a previous run — just backfill email if
-      // missing, and never touch the password on every restart.
-      if (!user.email) db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email, user.id);
-      return;
-    }
-    // First time promoting this (possibly leftover) account to admin: give
-    // it a known password so login is guaranteed to work.
-    const password = explicitPassword || generatePassword(12);
-    const hash = bcrypt.hashSync(password, 10);
-    db.prepare('UPDATE users SET email = ?, is_admin = 1, password_hash = ? WHERE id = ?').run(email, hash, user.id);
-    if (!explicitPassword) logGeneratedAdminPassword(email, password);
-    return;
+  // What password should end up set, if any this run:
+  //  - ADMIN_PASSWORD in .env always wins (operator explicitly wants it applied
+  //    now, even if this account is already an admin from a previous run —
+  //    that's exactly how you change it).
+  //  - otherwise, only generate+print a random one the first time this
+  //    account becomes admin, so plain restarts never rotate the password.
+  let passwordToApply = null;
+  let shouldLog = false;
+  if (explicitPassword) {
+    passwordToApply = explicitPassword;
+  } else if (!user || !user.is_admin) {
+    passwordToApply = generatePassword(12);
+    shouldLog = true;
   }
 
-  const password = explicitPassword || generatePassword(12);
-  const hash = bcrypt.hashSync(password, 10);
-  db.prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(
-    email,
-    email,
-    hash
-  );
-  if (!explicitPassword) logGeneratedAdminPassword(email, password);
+  if (user) {
+    const sets = ['is_admin = 1'];
+    const params = { id: user.id };
+    if (!user.email) {
+      sets.push('email = @email');
+      params.email = email;
+    }
+    if (passwordToApply) {
+      sets.push('password_hash = @hash');
+      params.hash = bcrypt.hashSync(passwordToApply, 10);
+    }
+    db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = @id`).run(params);
+  } else {
+    db.prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(
+      email,
+      email,
+      bcrypt.hashSync(passwordToApply, 10)
+    );
+  }
+
+  if (shouldLog) logGeneratedAdminPassword(email, passwordToApply);
 }
 
 ensureAdminUser();

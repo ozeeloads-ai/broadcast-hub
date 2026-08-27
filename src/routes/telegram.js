@@ -115,6 +115,36 @@ router.post('/caplist/clear', (req, res) => {
   res.json({ ok: true });
 });
 
+router.get('/caplist/autopull', (req, res) => {
+  const setting = tg.getAutoPullSetting(req.session.userId);
+  res.json({
+    enabled: !!(setting && setting.enabled),
+    intervalHours: setting ? setting.interval_hours : null,
+    lastPulledAt: setting ? setting.last_pulled_at : null,
+    nextPullAt: setting && setting.enabled ? setting.next_pull_at : null,
+  });
+});
+
+router.post('/caplist/autopull', async (req, res) => {
+  try {
+    const { intervalHours } = req.body || {};
+    const setting = await tg.setAutoPull(req.session.userId, intervalHours);
+    res.json({
+      enabled: !!(setting && setting.enabled),
+      intervalHours: setting ? setting.interval_hours : null,
+      lastPulledAt: setting ? setting.last_pulled_at : null,
+      nextPullAt: setting && setting.enabled ? setting.next_pull_at : null,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/caplist/autopull/stop', (req, res) => {
+  tg.stopAutoPull(req.session.userId);
+  res.json({ ok: true });
+});
+
 router.post('/send', async (req, res) => {
   try {
     const { groupIds, text, autoDeleteMinutes } = req.body || {};
