@@ -158,9 +158,27 @@ async function getClient(userId) {
 }
 
 function getStatus(userId) {
-  const row = db.prepare('SELECT phone, display_name, connected_at FROM telegram_accounts WHERE user_id = ?').get(userId);
+  const row = db
+    .prepare('SELECT phone, display_name, connected_at, signature FROM telegram_accounts WHERE user_id = ?')
+    .get(userId);
   if (!row) return { connected: false };
-  return { connected: true, phone: row.phone, displayName: row.display_name, connectedAt: row.connected_at };
+  return {
+    connected: true,
+    phone: row.phone,
+    displayName: row.display_name,
+    connectedAt: row.connected_at,
+    signature: row.signature || '',
+  };
+}
+
+// Lets a user set a handle (e.g. "@WaLllyWest") that gets automatically
+// appended to every message sent through their Telegram account, so
+// automated sends still read as personally coming from them.
+function setSignature(userId, signature) {
+  const trimmed = (signature || '').trim();
+  const info = db.prepare('UPDATE telegram_accounts SET signature = ? WHERE user_id = ?').run(trimmed, userId);
+  if (info.changes === 0) throw new Error('Telegram-аккаунт не подключён.');
+  return { signature: trimmed };
 }
 
 async function disconnect(userId) {
@@ -323,11 +341,15 @@ async function sendToGroups(userId, groupIds, text, autoDeleteMinutes) {
     .prepare(`SELECT * FROM telegram_groups WHERE user_id = ? AND id IN (${groupIds.map(() => '?').join(',')})`)
     .all(userId, ...groupIds);
 
+  const account = db.prepare('SELECT signature FROM telegram_accounts WHERE user_id = ?').get(userId);
+  const signature = account && account.signature ? account.signature.trim() : '';
+  const outgoingText = signature ? `${text}\n\n${signature}` : text;
+
   const results = [];
   for (const group of groups) {
     try {
       const peer = buildInputPeer(group);
-      const message = await client.sendMessage(peer, { message: text });
+      const message = await client.sendMessage(peer, { message: outgoingText });
       const autoDeleteAt =
         autoDeleteMinutes && autoDeleteMinutes > 0
           ? new Date(Date.now() + autoDeleteMinutes * 60 * 1000).toISOString()
@@ -336,7 +358,7 @@ async function sendToGroups(userId, groupIds, text, autoDeleteMinutes) {
       db.prepare(
         `INSERT INTO sent_messages (user_id, group_id, chat_id, message_id, text, auto_delete_at)
          VALUES (?, ?, ?, ?, ?, ?)`
-      ).run(userId, group.id, group.chat_id, message.id, text, autoDeleteAt);
+      ).run(userId, group.id, group.chat_id, message.id, outgoingText, autoDeleteAt);
 
       results.push({ groupId: group.id, title: group.title, ok: true });
     } catch (err) {
@@ -538,8 +560,8 @@ function attachCapListListener(userId, client) {
       }
 
       const insert = db.prepare(
-        `INSERT INTO cap_list_entries (user_id, group_id, chat_title, sender_name, raw_text, city, state, truck_type)
-         VALUES (@userId, @groupId, @chatTitle, @senderName, @rawText, @city, @state, @truckType)`
+        `INSERT INTO cap_list_entries (user_id, group_id, chat_title, sender_name, raw_text, city, state, truck_type, tg_message_id)
+         VALUES (@userId, @groupId, @chatTitle, @senderName, @rawText, @city, @state, @truckType, @tgMessageId)`
       );
       for (const match of matches) {
         insert.run({
@@ -551,6 +573,7 @@ function attachCapListListener(userId, client) {
           city: match.city,
           state: match.state,
           truckType: match.truckType,
+          tgMessageId: message.id,
         });
       }
     } catch {
@@ -627,76 +650,103 @@ function clearCapList(userId) {
   db.prepare('DELETE FROM cap_list_entries WHERE user_id = ?').run(userId);
 }
 
-// ---- Cap List Puller: auto-repeat the cap-list request every 1-3 hours ----
+// ---- Cap List Puller: scan message HISTORY for the past 1-3 hours ----
+// (looks backward at what's already been posted, not forward — it never
+// sends anything to the group).
 
-function getAutoPullSetting(userId) {
-  return db.prepare('SELECT * FROM cap_list_auto_pull WHERE user_id = ?').get(userId) || null;
+function getLastPull(userId) {
+  return db.prepare('SELECT * FROM cap_list_pull_log WHERE user_id = ?').get(userId) || null;
 }
 
-async function setAutoPull(userId, intervalHours) {
-  const hours = Number(intervalHours);
-  if (![1, 2, 3].includes(hours)) {
-    throw new Error('Интервал должен быть 1, 2 или 3 часа.');
+async function pullCapListHistory(userId, hours) {
+  const h = Number(hours);
+  if (![1, 2, 3].includes(h)) {
+    throw new Error('Выберите 1, 2 или 3 часа.');
   }
 
+  const client = await getClient(userId);
   const groups = listGroups(userId);
   if (!groups.length) {
     throw new Error('Сначала добавьте хотя бы одну группу.');
   }
 
-  // Pull right now, then schedule the next automatic repeat.
-  await sendToGroups(userId, groups.map((g) => g.id), CAP_LIST_REQUEST_TEXT);
+  const cutoffSec = Math.floor(Date.now() / 1000) - h * 60 * 60;
+  const perGroup = [];
+  let totalFound = 0;
 
-  const nowIso = new Date().toISOString();
-  const nextPullAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
-
-  db.prepare(
-    `INSERT INTO cap_list_auto_pull (user_id, interval_hours, enabled, last_pulled_at, next_pull_at)
-     VALUES (@userId, @hours, 1, @now, @next)
-     ON CONFLICT(user_id) DO UPDATE SET
-       interval_hours = excluded.interval_hours, enabled = 1,
-       last_pulled_at = excluded.last_pulled_at, next_pull_at = excluded.next_pull_at`
-  ).run({ userId, hours, now: nowIso, next: nextPullAt });
-
-  return getAutoPullSetting(userId);
-}
-
-function stopAutoPull(userId) {
-  db.prepare('UPDATE cap_list_auto_pull SET enabled = 0 WHERE user_id = ?').run(userId);
-}
-
-// Called periodically by the scheduler. Compares next_pull_at in JS (rather
-// than via SQLite's datetime('now')) so we don't have to worry about ISO
-// ("...T...Z") vs SQLite ("YYYY-MM-DD HH:MM:SS") string-format mismatches.
-async function runDueAutoPulls() {
-  const rows = db.prepare('SELECT * FROM cap_list_auto_pull WHERE enabled = 1').all();
-  const now = Date.now();
-
-  for (const row of rows) {
-    if (!row.next_pull_at) continue;
-    const iso = row.next_pull_at.includes('T') ? row.next_pull_at : row.next_pull_at.replace(' ', 'T') + 'Z';
-    const nextAt = new Date(iso).getTime();
-    if (Number.isNaN(nextAt) || nextAt > now) continue;
-
+  for (const group of groups) {
+    let foundInGroup = 0;
     try {
-      const groups = listGroups(row.user_id);
-      if (groups.length) {
-        await sendToGroups(row.user_id, groups.map((g) => g.id), CAP_LIST_REQUEST_TEXT);
+      const peer = buildInputPeer(group);
+      // Messages come back newest-first; a generous limit covers a busy
+      // freight channel over a 1-3 hour window without paging.
+      const messages = await client.getMessages(peer, { limit: 1000 });
+
+      for (const message of messages) {
+        if (!message || !message.message) continue;
+        if (message.date < cutoffSec) break; // older than our window — done with this group
+
+        const lines = message.message.split(/\r?\n/);
+        const matches = lines.map(parseCapListLine).filter(Boolean);
+        if (!matches.length) continue;
+
+        // Skip messages already captured (by the live listener, or a
+        // previous overlapping pull) so re-pulling doesn't duplicate rows.
+        const already = db
+          .prepare('SELECT 1 FROM cap_list_entries WHERE group_id = ? AND tg_message_id = ? LIMIT 1')
+          .get(group.id, message.id);
+        if (already) continue;
+
+        let senderName = '';
+        try {
+          const sender = await message.getSender();
+          if (sender) {
+            senderName =
+              [sender.firstName, sender.lastName].filter(Boolean).join(' ') ||
+              (sender.username ? '@' + sender.username : '');
+          }
+        } catch {
+          // best-effort only
+        }
+
+        const createdAt = new Date(message.date * 1000).toISOString().slice(0, 19).replace('T', ' ');
+        const insert = db.prepare(
+          `INSERT INTO cap_list_entries (user_id, group_id, chat_title, sender_name, raw_text, city, state, truck_type, tg_message_id, created_at)
+           VALUES (@userId, @groupId, @chatTitle, @senderName, @rawText, @city, @state, @truckType, @tgMessageId, @createdAt)`
+        );
+        for (const match of matches) {
+          insert.run({
+            userId,
+            groupId: group.id,
+            chatTitle: group.title,
+            senderName,
+            rawText: message.message,
+            city: match.city,
+            state: match.state,
+            truckType: match.truckType,
+            tgMessageId: message.id,
+            createdAt,
+          });
+          foundInGroup++;
+        }
       }
-      const nowIso = new Date().toISOString();
-      const nextPullAt = new Date(Date.now() + row.interval_hours * 60 * 60 * 1000).toISOString();
-      db.prepare('UPDATE cap_list_auto_pull SET last_pulled_at = ?, next_pull_at = ? WHERE user_id = ?').run(
-        nowIso,
-        nextPullAt,
-        row.user_id
-      );
+      totalFound += foundInGroup;
+      perGroup.push({ groupId: group.id, title: group.title, found: foundInGroup, ok: true });
     } catch (err) {
-      // Leave next_pull_at as-is so the scheduler retries this user again on
-      // its next tick instead of silently going quiet until someone notices
-      // (e.g. their Telegram session expired and needs reconnecting).
-      console.error(`[caplist] auto-pull failed for user ${row.user_id}:`, err.message);
+      perGroup.push({ groupId: group.id, title: group.title, ok: false, error: err.message });
     }
   }
+
+  const pulledAt = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO cap_list_pull_log (user_id, last_hours, last_pulled_at, last_found_count)
+     VALUES (@userId, @hours, @pulledAt, @totalFound)
+     ON CONFLICT(user_id) DO UPDATE SET
+       last_hours = excluded.last_hours, last_pulled_at = excluded.last_pulled_at,
+       last_found_count = excluded.last_found_count`
+  ).run({ userId, hours: h, pulledAt, totalFound });
+
+  return { hours: h, totalFound, groups: perGroup, pulledAt };
 }
 
 module.exports = {
@@ -720,10 +770,9 @@ module.exports = {
   listCapListLog,
   capListCounts,
   clearCapList,
-  getAutoPullSetting,
-  setAutoPull,
-  stopAutoPull,
-  runDueAutoPulls,
+  getLastPull,
+  pullCapListHistory,
+  setSignature,
   parseCapListLine,
   CAP_LIST_REQUEST_TEXT,
 };

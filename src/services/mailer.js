@@ -261,6 +261,22 @@ function setBrokerOnline(id, isOnline) {
   return getBroker(id);
 }
 
+// Any logged-in user (not just admins) may fill in or correct a broker's
+// email address — the one field the whole team is expected to keep current
+// even without full edit access to the rest of the broker's record.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function setBrokerEmail(id, email) {
+  const trimmed = (email || '').trim();
+  if (!EMAIL_RE.test(trimmed)) {
+    throw new Error('Введите корректный email.');
+  }
+  const existing = db.prepare('SELECT * FROM brokers WHERE id = ?').get(id);
+  if (!existing) throw new Error('Брокер не найден.');
+  db.prepare('UPDATE brokers SET email = ? WHERE id = ?').run(trimmed, id);
+  return getBroker(id);
+}
+
 function removeBroker(id) {
   db.prepare('DELETE FROM brokers WHERE id = ?').run(id);
 }
@@ -401,6 +417,7 @@ module.exports = {
   listBrokers,
   updateBroker,
   setBrokerOnline,
+  setBrokerEmail,
   removeBroker,
   importBrokersCsv,
 };

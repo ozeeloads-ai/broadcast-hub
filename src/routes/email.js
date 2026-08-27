@@ -68,6 +68,17 @@ router.put('/brokers/:id', requireAdmin, (req, res) => {
   }
 });
 
+// Open to any logged-in user, not just admins — anyone on the team can add
+// or fix a broker's email address even without full edit access.
+router.post('/brokers/:id/email', (req, res) => {
+  try {
+    const broker = mailer.setBrokerEmail(Number(req.params.id), (req.body || {}).email);
+    res.json(broker);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.post('/brokers/:id/online', requireAdmin, (req, res) => {
   try {
     const broker = mailer.setBrokerOnline(Number(req.params.id), !!(req.body || {}).online);

@@ -101,14 +101,14 @@ CREATE TABLE IF NOT EXISTS broker_send_log (
 );
 CREATE INDEX IF NOT EXISTS idx_broker_send_log_broker ON broker_send_log(broker_id);
 
--- Cap List Puller: lets a user ask the system to auto-repeat the cap-list
--- request to all their groups every N hours until stopped.
-CREATE TABLE IF NOT EXISTS cap_list_auto_pull (
+-- Cap List Puller: records the last time a user scanned their groups'
+-- message HISTORY (looking backward, not forward) for cap-list lines, so the
+-- UI can show "last pulled: N hours, at HH:MM, found X".
+CREATE TABLE IF NOT EXISTS cap_list_pull_log (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  interval_hours INTEGER NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  last_pulled_at TEXT,
-  next_pull_at TEXT
+  last_hours INTEGER NOT NULL,
+  last_pulled_at TEXT NOT NULL,
+  last_found_count INTEGER NOT NULL DEFAULT 0
 );
 
 -- Cap List: incoming Telegram messages from monitored groups get scanned for
@@ -151,6 +151,17 @@ ensureColumn('brokers', 'shuttle', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('brokers', 'is_online', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('brokers', 'birthday', 'TEXT');
 ensureColumn('brokers', 'notes', 'TEXT');
+
+// Lets a user's outgoing broadcasts automatically carry their Telegram
+// handle (e.g. "@WaLllyWest"), so messages sent through the site still read
+// as coming personally from them.
+ensureColumn('telegram_accounts', 'signature', 'TEXT');
+
+// Tracks which Telegram message a cap-list entry came from, so a Cap List
+// Puller history-scan doesn't create duplicate entries for a message the
+// live listener already captured, or on a re-pull of an overlapping window.
+ensureColumn('cap_list_entries', 'tg_message_id', 'INTEGER');
+db.exec('CREATE INDEX IF NOT EXISTS idx_cap_list_group_msg ON cap_list_entries(group_id, tg_message_id)');
 
 // One-time copy of any legacy single-mailbox rows into the new multi-mailbox
 // table, so users who connected mail before this update don't lose it.

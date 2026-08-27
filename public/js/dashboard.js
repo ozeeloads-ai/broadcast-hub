@@ -132,6 +132,7 @@ async function refreshTgStatus() {
   const status = await api('/api/telegram/status');
   if (status.connected) {
     document.getElementById('tgAccountName').textContent = `${status.displayName} (${status.phone})`;
+    document.getElementById('tgSignature').value = status.signature || '';
     show(document.getElementById('tgConnectedBlock'));
     hide(document.getElementById('tgLoginBlock'));
   } else {
@@ -139,6 +140,20 @@ async function refreshTgStatus() {
     show(document.getElementById('tgLoginBlock'));
   }
 }
+
+document.getElementById('tgSignatureSaveBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('tgError');
+  hide(errEl);
+  try {
+    await api('/api/telegram/signature', {
+      method: 'POST',
+      body: JSON.stringify({ signature: document.getElementById('tgSignature').value }),
+    });
+    flash(document.getElementById('tgSuccess'), 'Подпись сохранена.');
+  } catch (err) {
+    flash(errEl, err.message, true);
+  }
+});
 
 document.getElementById('tgSendCodeBtn').addEventListener('click', async () => {
   const phone = document.getElementById('tgPhone').value.trim();
@@ -489,6 +504,7 @@ async function requestCapList(groupIds) {
     } else {
       flash(okEl, `Запрос cap list отправлен в ${results.length} групп(у).`);
     }
+    await refreshCapListSentMessages();
   } catch (err) {
     flash(errEl, err.message, true);
   }
@@ -562,11 +578,11 @@ document.getElementById('capListSearch').addEventListener('input', () => {
 });
 
 // Keep the cap list showing fresh data on its own, without needing a manual
-// "Обновить" click — covers both the Puller's auto-repeats and any new
-// incoming group messages the passive listener picks up.
+// "Обновить" click — picks up anything the passive live listener captures
+// from new incoming group messages.
 setInterval(loadCapList, 60 * 1000);
 
-// ---- Cap List Puller (auto-repeat every 1-3 hours) ----
+// ---- Cap List Puller (scans message history for the past 1-3 hours) ----
 
 function formatClockTime(iso) {
   if (!iso) return null;
@@ -575,22 +591,19 @@ function formatClockTime(iso) {
   return d.toLocaleString();
 }
 
-async function refreshAutoPullStatus() {
+async function refreshPullStatus() {
   let status;
   try {
-    status = await api('/api/telegram/caplist/autopull');
+    status = await api('/api/telegram/caplist/pull/status');
   } catch {
     return;
   }
   const statusEl = document.getElementById('autopullStatus');
-  const stopBtn = document.getElementById('autopullStopBtn');
-  if (status.enabled) {
-    const next = formatClockTime(status.nextPullAt);
-    statusEl.textContent = `Автопул включён: каждые ${status.intervalHours} ч. ${next ? `Следующий запрос: ${next}` : ''}`;
-    show(stopBtn);
+  if (status.lastPulledAt) {
+    const when = formatClockTime(status.lastPulledAt);
+    statusEl.textContent = `Последний пул: за ${status.lastHours} ч., в ${when}, найдено записей: ${status.lastFoundCount}.`;
   } else {
-    statusEl.textContent = 'Автопул выключен.';
-    hide(stopBtn);
+    statusEl.textContent = 'Пул ещё не запускался.';
   }
 }
 
@@ -599,22 +612,66 @@ document.querySelectorAll('.autopull-btn').forEach((btn) => {
     const errEl = document.getElementById('capListRequestError');
     const okEl = document.getElementById('capListRequestSuccess');
     hide(errEl); hide(okEl);
+    btn.disabled = true;
     try {
-      await api('/api/telegram/caplist/autopull', {
+      const result = await api('/api/telegram/caplist/pull', {
         method: 'POST',
-        body: JSON.stringify({ intervalHours: Number(btn.dataset.hours) }),
+        body: JSON.stringify({ hours: Number(btn.dataset.hours) }),
       });
-      flash(okEl, `Cap List запрошен сейчас, дальше — автоматически каждые ${btn.dataset.hours} ч.`);
-      await refreshAutoPullStatus();
+      flash(okEl, `Просканировано за последние ${result.hours} ч., найдено новых записей: ${result.totalFound}.`);
+      await refreshPullStatus();
+      await loadCapList();
     } catch (err) {
       flash(errEl, err.message, true);
+    } finally {
+      btn.disabled = false;
     }
   });
 });
 
-document.getElementById('autopullStopBtn').addEventListener('click', async () => {
-  await api('/api/telegram/caplist/autopull/stop', { method: 'POST' });
-  await refreshAutoPullStatus();
+// ---- Sent Cap List requests (from the "Запросить" buttons above) ----
+
+async function refreshCapListSentMessages() {
+  let all;
+  try {
+    all = await api('/api/telegram/messages');
+  } catch {
+    return;
+  }
+  const filtered = all.filter((m) => m.text && m.text.startsWith(capListTemplateText));
+  const tbody = document.getElementById('capListSentTableBody');
+  tbody.innerHTML = '';
+  document.getElementById('capListSentEmptyMsg').style.display = filtered.length ? 'none' : 'block';
+
+  for (const m of filtered) {
+    const status = m.deleted_at
+      ? '<span class="badge deleted">удалено</span>'
+      : m.auto_delete_at
+      ? `<span class="badge scheduled">авто-удаление ${new Date(m.auto_delete_at).toLocaleTimeString()}</span>`
+      : '<span class="badge">активно</span>';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="checkbox-cell">${m.deleted_at ? '' : `<input type="checkbox" class="caplist-message-checkbox" value="${m.id}" />`}</td>
+      <td>${escapeHtml(m.title || '')}</td>
+      <td>${m.sent_at}</td>
+      <td>${status}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+document.getElementById('capListSentRefreshBtn').addEventListener('click', refreshCapListSentMessages);
+document.getElementById('capListSentSelectAllBtn').addEventListener('click', () => {
+  document.querySelectorAll('.caplist-message-checkbox').forEach((cb) => (cb.checked = true));
+});
+document.getElementById('capListSentSelectAllHeader').addEventListener('change', (e) => {
+  document.querySelectorAll('.caplist-message-checkbox').forEach((cb) => (cb.checked = e.target.checked));
+});
+document.getElementById('capListSentDeleteBtn').addEventListener('click', async () => {
+  const ids = [...document.querySelectorAll('.caplist-message-checkbox:checked')].map((cb) => Number(cb.value));
+  if (!ids.length) return;
+  await api('/api/telegram/messages/delete', { method: 'POST', body: JSON.stringify({ messageDbIds: ids }) });
+  await refreshCapListSentMessages();
 });
 
 // ================= DISTANCE =================
@@ -836,7 +893,14 @@ function renderBrokerRow(b) {
             }</button>
         <button class="btn-danger remove-broker-btn" data-id="${b.id}">Удалить</button>
       </div>`
-          : ''
+          : `<label class="hint" style="display:block;margin-top:8px;">Указать/обновить email брокера</label>
+      <div class="toolbar" style="margin-top:4px;">
+        <input type="email" class="broker-email-input" id="brokerEmailInput-${b.id}" value="${escapeHtml(
+              b.email || ''
+            )}" placeholder="email@example.com" />
+        <button class="btn-primary broker-email-save-btn" data-id="${b.id}">Сохранить email</button>
+      </div>
+      <p class="muted" id="brokerEmailMsg-${b.id}" style="display:none;"></p>`
       }
     </div>
   `;
@@ -880,6 +944,23 @@ function wireBrokerRowEvents() {
       await refreshBrokers();
     });
   });
+  document.querySelectorAll('.broker-email-save-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const input = document.getElementById(`brokerEmailInput-${id}`);
+      const msgEl = document.getElementById(`brokerEmailMsg-${id}`);
+      try {
+        await api(`/api/email/brokers/${id}/email`, {
+          method: 'POST',
+          body: JSON.stringify({ email: input.value.trim() }),
+        });
+        flash(msgEl, 'Email обновлён.');
+        await refreshBrokers();
+      } catch (err) {
+        flash(msgEl, err.message, true);
+      }
+    });
+  });
 }
 
 function renderBrokers() {
@@ -921,6 +1002,13 @@ document.querySelectorAll('#brokerShiftFilters .tab-toggle-btn').forEach((btn) =
     btn.classList.add('active');
     brokerFilters.shift = btn.dataset.shift;
     renderBrokers();
+    // Clicking DAY or NIGHT is meant as a one-click "pick this shift to send
+    // to" shortcut: auto-check every broker the filter just left visible, so
+    // there's no separate select-all click needed. "Все смены" only narrows
+    // the view and doesn't touch the current selection.
+    if (btn.dataset.shift === 'day' || btn.dataset.shift === 'night') {
+      document.querySelectorAll('.broker-checkbox').forEach((cb) => (cb.checked = true));
+    }
   });
 });
 document.querySelectorAll('#brokerToggleFilters .tab-toggle-btn').forEach((btn) => {
@@ -1196,6 +1284,7 @@ document.getElementById('addUserBtn').addEventListener('click', async () => {
     refreshMailboxes(),
     refreshBrokers(),
     loadCapList(),
-    refreshAutoPullStatus(),
+    refreshPullStatus(),
+    refreshCapListSentMessages(),
   ]);
 })();
