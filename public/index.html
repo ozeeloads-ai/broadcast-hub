@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Broadcast Hub — вход</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<div class="center-screen">
+  <div class="auth-card">
+    <h1 id="formTitle">Вход</h1>
+    <p class="sub">TG Sender + Email Sender</p>
+
+    <form id="authForm">
+      <label for="username">Логин</label>
+      <input id="username" name="username" autocomplete="username" required />
+
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required />
+
+      <button type="submit" class="btn-primary full-width" id="submitBtn">Войти</button>
+    </form>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="toggle-row" id="toggleRow">
+      Нет аккаунта? <a id="toggleLink">Зарегистрироваться</a>
+    </div>
+  </div>
+</div>
+
+<script src="/js/auth.js"></script>
+</body>
+</html>
