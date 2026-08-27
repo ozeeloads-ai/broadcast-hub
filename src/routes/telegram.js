@@ -110,6 +110,28 @@ router.get('/caplist/log', (req, res) => {
   });
 });
 
+router.post('/caplist/clear', (req, res) => {
+  tg.clearCapList(req.session.userId);
+  res.json({ ok: true });
+});
+
+router.get('/hardpull/template', (req, res) => {
+  res.json({ text: tg.HARD_PULL_TEXT });
+});
+
+router.post('/hardpull', async (req, res) => {
+  try {
+    const { groupIds } = req.body || {};
+    if (!Array.isArray(groupIds) || groupIds.length === 0) {
+      return res.status(400).json({ error: 'Выберите хотя бы одну группу.' });
+    }
+    const results = await tg.hardPullGroups(req.session.userId, groupIds);
+    res.json({ results });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.post('/send', async (req, res) => {
   try {
     const { groupIds, text, autoDeleteMinutes } = req.body || {};

@@ -320,6 +320,16 @@
 
     <div class="error-msg" id="capListRequestError"></div>
     <div class="success-msg" id="capListRequestSuccess"></div>
+
+    <p class="hint" style="margin-top:20px;">Hard Pull — тегнет всех участников группы (кроме исключённых из списка) сообщением: «<em id="hardPullTemplateText">Please share cap list , lets books some loads</em>».</p>
+
+    <div class="toolbar">
+      <button class="btn-danger" id="hardPullSelectedBtn">Hard Pull — выбранным</button>
+      <button class="btn-danger" id="hardPullAllBtn">Hard Pull — всем группам</button>
+    </div>
+
+    <div class="error-msg" id="hardPullError"></div>
+    <div class="success-msg" id="hardPullSuccess"></div>
   </div>
 
   <div class="card">
@@ -334,6 +344,7 @@
       <button class="btn-secondary tab-toggle-btn" id="capListFilterSolo" data-kind="solo">SOLO <span class="count-badge" id="capListCountSolo">0</span></button>
       <button class="btn-secondary tab-toggle-btn" id="capListFilterLog" data-kind="log">LOG <span class="count-badge" id="capListCountLog">0</span></button>
       <button class="btn-secondary" id="capListRefreshBtn" style="margin-left:auto;">Обновить</button>
+      <button class="btn-danger" id="capListClearBtn">Очистить список</button>
     </div>
 
     <table>

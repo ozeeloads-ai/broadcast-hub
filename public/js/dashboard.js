@@ -441,6 +441,48 @@ document.getElementById('capListRequestAllBtn').addEventListener('click', () => 
   requestCapList(groups.map((g) => g.id));
 });
 
+(async function loadHardPullTemplate() {
+  try {
+    const { text } = await api('/api/telegram/hardpull/template');
+    document.getElementById('hardPullTemplateText').textContent = text;
+  } catch {
+    // fall back to the hard-coded default already shown in the HTML
+  }
+})();
+
+async function hardPullGroups(groupIds) {
+  const errEl = document.getElementById('hardPullError');
+  const okEl = document.getElementById('hardPullSuccess');
+  hide(errEl); hide(okEl);
+  if (!groupIds.length) return flash(errEl, 'Выберите хотя бы одну группу.', true);
+
+  try {
+    const { results } = await api('/api/telegram/hardpull', {
+      method: 'POST',
+      body: JSON.stringify({ groupIds }),
+    });
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) {
+      flash(errEl, `С ошибками: ${failed.map((f) => `${f.title}: ${f.error}`).join('; ')}`, true);
+    }
+    const okResults = results.filter((r) => r.ok);
+    if (okResults.length) {
+      const total = okResults.reduce((sum, r) => sum + (r.mentioned || 0), 0);
+      flash(okEl, `Hard Pull отправлен в ${okResults.length} групп(у), упомянуто участников: ${total}.`);
+    }
+  } catch (err) {
+    flash(errEl, err.message, true);
+  }
+}
+
+document.getElementById('hardPullSelectedBtn').addEventListener('click', () => {
+  const ids = [...document.querySelectorAll('.caplist-group-checkbox:checked')].map((cb) => Number(cb.value));
+  hardPullGroups(ids);
+});
+document.getElementById('hardPullAllBtn').addEventListener('click', () => {
+  hardPullGroups(groups.map((g) => g.id));
+});
+
 function formatCapListLocation(entry) {
   return entry.city ? `${entry.city}, ${entry.state}` : entry.state;
 }
@@ -490,6 +532,11 @@ document.querySelectorAll('#tab-caplist .tab-toggle-btn').forEach((btn) => {
 });
 
 document.getElementById('capListRefreshBtn').addEventListener('click', loadCapList);
+document.getElementById('capListClearBtn').addEventListener('click', async () => {
+  if (!confirm('Очистить весь список и историю Cap List? Это действие необратимо.')) return;
+  await api('/api/telegram/caplist/clear', { method: 'POST' });
+  await loadCapList();
+});
 document.getElementById('capListSearch').addEventListener('input', () => {
   clearTimeout(capListSearchTimer);
   capListSearchTimer = setTimeout(loadCapList, 350);
