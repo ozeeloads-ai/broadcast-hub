@@ -1,33 +1,46 @@
 const express = require('express');
-const { requireAuth } = require('../middleware/auth');
+const { requireAuth, requireAdmin } = require('../middleware/auth');
 const mailer = require('../services/mailer');
 
 const router = express.Router();
 router.use(requireAuth);
 
-router.get('/status', (req, res) => {
-  res.json(mailer.getStatus(req.session.userId));
+// ---- Mailboxes (each user can connect up to 5) ----
+
+router.get('/mailboxes', (req, res) => {
+  res.json(mailer.listMailboxes(req.session.userId));
 });
 
-router.post('/connect', async (req, res) => {
+router.post('/mailboxes', async (req, res) => {
   try {
-    const account = await mailer.connectAccount(req.session.userId, req.body || {});
-    res.json(account);
+    const mailbox = await mailer.connectMailbox(req.session.userId, req.body || {});
+    res.json(mailbox);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-router.post('/disconnect', (req, res) => {
-  mailer.disconnect(req.session.userId);
+router.post('/mailboxes/:id/default', (req, res) => {
+  try {
+    mailer.setDefaultMailbox(req.session.userId, Number(req.params.id));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/mailboxes/:id', (req, res) => {
+  mailer.disconnectMailbox(req.session.userId, Number(req.params.id));
   res.json({ ok: true });
 });
 
+// ---- Brokers (global list; only an admin can add/edit/remove) ----
+
 router.get('/brokers', (req, res) => {
-  res.json(mailer.listBrokers(req.session.userId));
+  res.json(mailer.listBrokers());
 });
 
-router.post('/brokers', (req, res) => {
+router.post('/brokers', requireAdmin, (req, res) => {
   try {
     const broker = mailer.addBroker(req.session.userId, req.body || {});
     res.json(broker);
@@ -36,30 +49,51 @@ router.post('/brokers', (req, res) => {
   }
 });
 
-router.put('/brokers/:id', (req, res) => {
+router.post('/brokers/import', requireAdmin, (req, res) => {
   try {
-    mailer.updateBroker(req.session.userId, Number(req.params.id), req.body || {});
-    res.json({ ok: true });
+    const { csv } = req.body || {};
+    const result = mailer.importBrokersCsv(req.session.userId, csv);
+    res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-router.delete('/brokers/:id', (req, res) => {
-  mailer.removeBroker(req.session.userId, Number(req.params.id));
+router.put('/brokers/:id', requireAdmin, (req, res) => {
+  try {
+    const broker = mailer.updateBroker(Number(req.params.id), req.body || {});
+    res.json(broker);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/brokers/:id/online', requireAdmin, (req, res) => {
+  try {
+    const broker = mailer.setBrokerOnline(Number(req.params.id), !!(req.body || {}).online);
+    res.json(broker);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.delete('/brokers/:id', requireAdmin, (req, res) => {
+  mailer.removeBroker(Number(req.params.id));
   res.json({ ok: true });
 });
 
+// ---- Send ----
+
 router.post('/send', async (req, res) => {
   try {
-    const { brokerIds, subject, text, delaySeconds } = req.body || {};
+    const { mailboxId, brokerIds, subject, text, delaySeconds } = req.body || {};
     if (!Array.isArray(brokerIds) || brokerIds.length === 0) {
       return res.status(400).json({ error: 'Выберите хотя бы одного брокера.' });
     }
     if (!subject || !text) {
       return res.status(400).json({ error: 'Заполните тему и текст письма.' });
     }
-    const results = await mailer.sendToBrokers(req.session.userId, brokerIds, subject, text, delaySeconds);
+    const results = await mailer.sendToBrokers(req.session.userId, mailboxId, brokerIds, subject, text, delaySeconds);
     res.json({ results });
   } catch (err) {
     res.status(400).json({ error: err.message });

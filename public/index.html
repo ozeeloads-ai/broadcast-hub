@@ -9,12 +9,12 @@
 <body>
 <div class="center-screen">
   <div class="auth-card">
-    <h1 id="formTitle">Вход</h1>
+    <h1>Вход</h1>
     <p class="sub">TG Sender + Email Sender</p>
 
     <form id="authForm">
-      <label for="username">Логин</label>
-      <input id="username" name="username" autocomplete="username" required />
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="username" required />
 
       <label for="password">Пароль</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required />
@@ -23,10 +23,7 @@
     </form>
 
     <div class="error-msg" id="errorMsg"></div>
-
-    <div class="toggle-row" id="toggleRow">
-      Нет аккаунта? <a id="toggleLink">Зарегистрироваться</a>
-    </div>
+    <p class="muted" style="text-align:center; margin-top:16px;">Доступ выдаёт администратор. Если у вас нет логина и пароля — обратитесь к нему.</p>
   </div>
 </div>
 

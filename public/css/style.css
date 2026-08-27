@@ -279,3 +279,165 @@ tr:hover td { background: rgba(255,255,255,.02); }
 @media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } }
 
 .muted { color: var(--muted); font-size: 13px; }
+
+/* ---- Broker panel ---- */
+
+.broker-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.broker-panel-header h2 { letter-spacing: .04em; }
+
+.broker-filter-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.broker-filter-row .tab-toggle-btn { padding: 6px 12px; font-size: 12px; }
+.tab-toggle-btn.rating-elite.active { background: #a855f7; border-color: #a855f7; color: #fff; }
+
+.broker-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+@media (max-width: 800px) { .broker-columns { grid-template-columns: 1fr; } }
+
+.broker-column-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 6px;
+}
+
+.broker-row {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 4px;
+}
+.broker-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.broker-row-main input[type="checkbox"] { width: auto; }
+.broker-online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: 0 0 auto;
+}
+.broker-online-dot.online { background: var(--accent-2); box-shadow: 0 0 6px var(--accent-2); }
+.broker-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.broker-badge-new {
+  font-size: 10px;
+  font-weight: 700;
+  color: #06281a;
+  background: var(--accent-2);
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+.broker-badge-pct {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+.broker-badge-pct.pct-high { color: var(--accent-2); background: rgba(62,207,142,.14); }
+.broker-badge-pct.pct-mid { color: #ffcf5c; background: rgba(255,207,92,.14); }
+.broker-badge-pct.pct-low { color: var(--danger); background: rgba(255,92,114,.14); }
+.broker-stars { font-size: 12px; color: var(--border); letter-spacing: 1px; white-space: nowrap; }
+.broker-stars.has-rating { color: #ffcf5c; }
+.broker-stars.elite { color: #a855f7; }
+.broker-mail-btn { padding: 5px 12px; font-size: 12px; flex: 0 0 auto; }
+.broker-expand-btn {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.broker-row-details {
+  display: none;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.broker-row-details.open { display: block; }
+.broker-row-details .toolbar { margin-top: 10px; }
+.broker-row-details dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; }
+.broker-row-details dt { color: var(--muted); }
+.broker-row-details dd { margin: 0; color: var(--text); }
+
+/* ---- Modal (add/edit broker) ---- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4,7,15,.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.modal {
+  width: 100%;
+  max-width: 440px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+.modal h2 { margin: 0 0 16px; font-size: 18px; }
+
+.segmented {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.segmented-btn {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.segmented-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.segmented-btn.rating-elite.active { background: #a855f7; border-color: #a855f7; }
+
+/* ---- Mailboxes ---- */
+
+.mailbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.mailbox-row .mailbox-label { font-weight: 600; }
+.mailbox-row .mailbox-email { color: var(--muted); }
+.mailbox-row button { padding: 4px 10px; font-size: 12px; }

@@ -5,4 +5,11 @@ function requireAuth(req, res, next) {
   return res.status(401).json({ error: 'Не авторизован. Пожалуйста, войдите в систему.' });
 }
 
-module.exports = { requireAuth };
+function requireAdmin(req, res, next) {
+  if (req.session && req.session.userId && req.session.isAdmin) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Доступно только администратору.' });
+}
+
+module.exports = { requireAuth, requireAdmin };

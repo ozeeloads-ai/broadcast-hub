@@ -84,6 +84,7 @@
   <button class="tab-btn" data-tab="mail">Email Sender</button>
   <button class="tab-btn" data-tab="caplist">CAP LIST</button>
   <button class="tab-btn" data-tab="distance">Дистанция</button>
+  <button class="tab-btn" data-tab="admin" id="adminTabBtn" style="display:none;">Admin</button>
 </div>
 
 <!-- ============ TG SENDER TAB ============ -->
@@ -259,11 +260,15 @@
     <textarea id="mailBody" placeholder="Текст письма..."></textarea>
 
     <div class="row" style="margin-top:14px;">
+      <div style="flex:0; min-width:220px;">
+        <label style="margin:0;">Отправить с ящика</label>
+        <select id="mailSendFrom"></select>
+      </div>
       <div style="flex:0;">
         <label style="margin:0;">Задержка между письмами</label>
-        <input id="mailSendDelay" type="number" min="0" max="5" step="0.5" value="1" style="width:90px;" />
+        <input id="mailSendDelay" type="number" min="2" max="300" step="1" value="2" style="width:90px;" />
       </div>
-      <div style="flex:0; align-self:flex-end; padding-bottom:10px;"><span class="muted">сек. (0–5)</span></div>
+      <div style="flex:0; align-self:flex-end; padding-bottom:10px;"><span class="muted">сек. (мин. 2)</span></div>
     </div>
 
     <div class="toolbar" style="margin-top:16px;">
@@ -277,65 +282,82 @@
   </div>
 
   <div class="card">
-    <h2>Брокеры</h2>
-    <div class="two-col">
-      <div>
-        <label>Имя</label>
-        <input id="brokerFirstName" />
-      </div>
-      <div>
-        <label>Фамилия</label>
-        <input id="brokerLastName" />
+    <div class="broker-panel-header">
+      <h2 style="margin:0;">БРОКЕРЫ</h2>
+      <div class="toolbar" id="brokerAdminActions" style="margin:0; display:none;">
+        <button class="btn-primary" id="addBrokerOpenBtn">+ Добавить</button>
+        <button class="btn-secondary" id="importCsvBtn">Импорт CSV</button>
+        <input type="file" id="importCsvFile" accept=".csv" style="display:none;" />
       </div>
     </div>
-    <div class="two-col">
-      <div>
-        <label>Рабочие часы</label>
-        <input id="brokerWorkHours" placeholder="Пн-Пт 09:00-18:00" />
-      </div>
-      <div>
-        <label>Email</label>
-        <input id="brokerEmail" placeholder="broker@company.com" />
-      </div>
-    </div>
-    <button class="btn-primary" id="addBrokerBtn" style="margin-top:14px;">Добавить брокера</button>
 
-    <table style="margin-top:20px;">
-      <thead>
-        <tr>
-          <th class="checkbox-cell"><input type="checkbox" id="selectAllBrokers" /></th>
-          <th>Имя</th>
-          <th>Фамилия</th>
-          <th>Рабочие часы</th>
-          <th>Email</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="brokersTableBody"></tbody>
-    </table>
+    <div class="broker-filter-row" id="brokerRatingFilters">
+      <button class="btn-secondary tab-toggle-btn active" data-rating="all">Все</button>
+      <button class="btn-secondary tab-toggle-btn rating-elite" data-rating="5">5★ ELITE</button>
+      <button class="btn-secondary tab-toggle-btn" data-rating="4">★★★★</button>
+      <button class="btn-secondary tab-toggle-btn" data-rating="3">★★★</button>
+      <button class="btn-secondary tab-toggle-btn" data-rating="2">★★</button>
+      <button class="btn-secondary tab-toggle-btn" data-rating="1">★</button>
+      <button class="btn-secondary tab-toggle-btn" data-rating="0">Без ★</button>
+    </div>
+
+    <div class="broker-filter-row" id="brokerShiftFilters">
+      <button class="btn-secondary tab-toggle-btn active" data-shift="all">Все смены</button>
+      <button class="btn-secondary tab-toggle-btn" data-shift="day">DAY</button>
+      <button class="btn-secondary tab-toggle-btn" data-shift="night">NIGHT</button>
+    </div>
+
+    <div class="broker-filter-row" id="brokerToggleFilters">
+      <button class="btn-secondary tab-toggle-btn" data-toggle="shuttle">🚐 Shuttle</button>
+      <button class="btn-secondary tab-toggle-btn" data-toggle="notBroker">✕ Not broker</button>
+      <button class="btn-secondary tab-toggle-btn" data-toggle="online">● Online</button>
+    </div>
+
+    <div class="row" style="margin-bottom:14px;">
+      <input id="brokerSearch" placeholder="Поиск..." />
+      <select id="brokerSearchScope" style="flex:0; width:110px;">
+        <option value="all">Все</option>
+        <option value="name">Имя</option>
+        <option value="email">Email</option>
+      </select>
+    </div>
+
+    <div class="broker-columns">
+      <div class="broker-column">
+        <div class="broker-column-header">☀️ DAY <span class="count-badge" id="brokerCountDay">0</span></div>
+        <div id="brokerListDay"></div>
+      </div>
+      <div class="broker-column">
+        <div class="broker-column-header">🌙 NIGHT <span class="count-badge" id="brokerCountNight">0</span></div>
+        <div id="brokerListNight"></div>
+      </div>
+    </div>
     <p class="muted" id="brokersEmptyMsg">Брокеров пока нет.</p>
+    <div class="error-msg" id="brokerActionError"></div>
+    <div class="success-msg" id="brokerActionSuccess"></div>
   </div>
 
   <div class="card">
     <div class="collapsible-header" id="mailCardToggle">
-      <h2 style="margin:0;">Почтовый аккаунт</h2>
+      <h2 style="margin:0;">Почтовые ящики</h2>
       <span class="toggle-hint" id="mailCardToggleHint">Показать ▾</span>
     </div>
 
     <div class="collapsible-body collapsed" id="mailCardBody">
-      <p class="hint">Подключите свою почту (SMTP), чтобы отправлять письма брокерам от своего имени.</p>
+      <p class="hint">Подключите до 5 своих почтовых ящиков (SMTP) — при отправке можно выбрать, с какого именно слать.</p>
 
-      <div id="mailConnectedBlock" style="display:none;">
-        <span class="status-pill connected">🟢 Подключено: <span id="mailAccountEmail"></span></span>
-        <button class="btn-secondary" id="mailDisconnectBtn" style="margin-left:12px;">Отключить</button>
-      </div>
+      <div id="mailboxList"></div>
+      <p class="muted" id="mailboxEmptyMsg">Почтовые ящики ещё не подключены.</p>
 
-      <div id="mailConnectForm">
+      <div id="mailConnectForm" style="margin-top:16px;">
         <div class="toolbar">
           <button class="btn-secondary" data-preset="gmail">Gmail</button>
           <button class="btn-secondary" data-preset="outlook">Outlook</button>
           <button class="btn-secondary" data-preset="custom">Свой SMTP</button>
         </div>
+
+        <label>Название (для себя)</label>
+        <input id="mailLabel" placeholder="Например: Основной, Диспетчер 2..." />
 
         <div class="two-col">
           <div>
@@ -362,7 +384,7 @@
           </div>
         </div>
 
-        <button class="btn-primary" id="mailConnectBtn" style="margin-top:16px;">Подключить почту</button>
+        <button class="btn-primary" id="mailConnectBtn" style="margin-top:16px;">Подключить почтовый ящик</button>
         <p class="muted">Для Gmail/Outlook обычно нужен «пароль приложения» (16 символов), а не обычный пароль от аккаунта. Для Gmail получить его можно здесь: <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a></p>
       </div>
 
@@ -371,6 +393,76 @@
     </div>
   </div>
 
+</div>
+
+<!-- ============ ADD / EDIT BROKER MODAL ============ -->
+<div class="modal-overlay" id="brokerModalOverlay" style="display:none;">
+  <div class="modal">
+    <h2 id="brokerModalTitle">Добавить брокера</h2>
+
+    <label>Имя</label>
+    <input id="brokerName" placeholder="Фамилия, Имя" />
+
+    <label>Email</label>
+    <input id="brokerEmailInput" placeholder="broker@company.com" />
+
+    <label>Смена</label>
+    <div class="segmented" id="brokerShiftPicker">
+      <button type="button" class="segmented-btn active" data-shift="">—</button>
+      <button type="button" class="segmented-btn" data-shift="day">DAY</button>
+      <button type="button" class="segmented-btn" data-shift="night">NIGHT</button>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <label>С</label>
+        <input id="brokerHoursFrom" type="time" value="09:00" />
+      </div>
+      <div>
+        <label>До</label>
+        <input id="brokerHoursTo" type="time" value="21:00" />
+      </div>
+    </div>
+
+    <label>Рабочие дни</label>
+    <div class="segmented" id="brokerDaysPicker">
+      <button type="button" class="segmented-btn" data-day="Mo">Mo</button>
+      <button type="button" class="segmented-btn" data-day="Tu">Tu</button>
+      <button type="button" class="segmented-btn" data-day="We">We</button>
+      <button type="button" class="segmented-btn" data-day="Th">Th</button>
+      <button type="button" class="segmented-btn" data-day="Fr">Fr</button>
+      <button type="button" class="segmented-btn" data-day="Sa">Sa</button>
+      <button type="button" class="segmented-btn" data-day="Su">Su</button>
+    </div>
+
+    <label>Звёзды</label>
+    <div class="segmented" id="brokerRatingPicker">
+      <button type="button" class="segmented-btn active" data-rating="">—</button>
+      <button type="button" class="segmented-btn" data-rating="1">★</button>
+      <button type="button" class="segmented-btn" data-rating="2">★★</button>
+      <button type="button" class="segmented-btn" data-rating="3">★★★</button>
+      <button type="button" class="segmented-btn" data-rating="4">★★★★</button>
+      <button type="button" class="segmented-btn rating-elite" data-rating="5">5★ ELITE</button>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:8px; margin-top:14px;">
+      <input type="checkbox" id="brokerShuttle" style="width:auto;" />
+      <label style="margin:0;">🚐 Shuttle</label>
+    </div>
+
+    <label>🎂 День рождения</label>
+    <input id="brokerBirthday" type="date" />
+
+    <label>📝 Заметки</label>
+    <textarea id="brokerNotes" placeholder="Any notes about this broker..."></textarea>
+
+    <div class="error-msg" id="brokerModalError"></div>
+
+    <div class="toolbar" style="margin-top:18px; justify-content:flex-end;">
+      <button class="btn-secondary" id="brokerModalCancelBtn">Отмена</button>
+      <button class="btn-primary" id="brokerModalSaveBtn">Сохранить</button>
+    </div>
+  </div>
 </div>
 
 <!-- ============ CAP LIST TAB ============ -->
@@ -391,24 +483,6 @@
 
     <div class="error-msg" id="capListRequestError"></div>
     <div class="success-msg" id="capListRequestSuccess"></div>
-
-    <p class="hint" style="margin-top:20px;">Hard Pull — тегнет всех участников группы (кроме исключённых из списка) сообщением: «<em id="hardPullTemplateText">Please share cap list , lets books some loads</em>».</p>
-
-    <div class="row" style="margin-bottom:12px;">
-      <div style="flex:0;">
-        <label style="margin:0;">Задержка между группами</label>
-        <input id="hardPullDelay" type="number" min="0" max="5" step="0.5" value="1" style="width:90px;" />
-      </div>
-      <div style="flex:0; align-self:flex-end; padding-bottom:10px;"><span class="muted">сек. (0–5)</span></div>
-    </div>
-
-    <div class="toolbar">
-      <button class="btn-danger" id="hardPullSelectedBtn">Hard Pull — выбранным</button>
-      <button class="btn-danger" id="hardPullAllBtn">Hard Pull — всем группам</button>
-    </div>
-
-    <div class="error-msg" id="hardPullError"></div>
-    <div class="success-msg" id="hardPullSuccess"></div>
   </div>
 
   <div class="card">
@@ -474,6 +548,36 @@
       </div>
       <div class="success-msg" id="distanceCopySuccess"></div>
     </div>
+  </div>
+
+</div>
+
+<!-- ============ ADMIN TAB ============ -->
+<div class="tab-content" id="tab-admin">
+
+  <div class="card">
+    <h2>Доступ пользователей</h2>
+    <p class="hint">Самостоятельная регистрация отключена — вход в систему получают только те, кого вы добавите здесь. Пароль генерируется автоматически и показывается один раз — обязательно скопируйте и передайте его.</p>
+
+    <div class="inline-form" style="margin-bottom:16px;">
+      <input id="newUserEmail" type="email" placeholder="participant@company.com" />
+      <button class="btn-primary" id="addUserBtn">Сгенерировать доступ</button>
+    </div>
+
+    <div class="success-msg" id="newUserResult" style="display:none;"></div>
+    <div class="error-msg" id="adminError"></div>
+
+    <table style="margin-top:16px;">
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Роль</th>
+          <th>Добавлен</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="usersTableBody"></tbody>
+    </table>
   </div>
 
 </div>

@@ -38,4 +38,14 @@ function decrypt(payload) {
   return decrypted.toString('utf8');
 }
 
-module.exports = { encrypt, decrypt };
+// Generates a random, human-typeable password for admin-created accounts
+// (no ambiguous characters like 0/O or l/1/I).
+function generatePassword(length = 10) {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = crypto.randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
+module.exports = { encrypt, decrypt, generatePassword };

@@ -26,11 +26,19 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
   window.location.href = '/';
 });
 
+let currentUser = { email: '', isAdmin: false };
+
 (async function initUser() {
   try {
     const me = await api('/api/auth/me');
     if (!me.authenticated) return (window.location.href = '/');
-    document.getElementById('whoami').textContent = me.username;
+    currentUser = { email: me.email, isAdmin: !!me.isAdmin };
+    document.getElementById('whoami').textContent = me.email;
+    if (currentUser.isAdmin) {
+      document.getElementById('adminTabBtn').style.display = '';
+      document.getElementById('brokerAdminActions').style.display = '';
+      await refreshUsers();
+    }
   } catch {
     window.location.href = '/';
   }
@@ -494,50 +502,6 @@ document.getElementById('capListRequestAllBtn').addEventListener('click', () => 
   requestCapList(groups.map((g) => g.id));
 });
 
-(async function loadHardPullTemplate() {
-  try {
-    const { text } = await api('/api/telegram/hardpull/template');
-    document.getElementById('hardPullTemplateText').textContent = text;
-  } catch {
-    // fall back to the hard-coded default already shown in the HTML
-  }
-})();
-
-async function hardPullGroups(groupIds) {
-  const errEl = document.getElementById('hardPullError');
-  const okEl = document.getElementById('hardPullSuccess');
-  hide(errEl); hide(okEl);
-  if (!groupIds.length) return flash(errEl, 'Выберите хотя бы одну группу.', true);
-
-  const delaySeconds = Number(document.getElementById('hardPullDelay').value) || 0;
-
-  try {
-    const { results } = await api('/api/telegram/hardpull', {
-      method: 'POST',
-      body: JSON.stringify({ groupIds, delaySeconds }),
-    });
-    const failed = results.filter((r) => !r.ok);
-    if (failed.length) {
-      flash(errEl, `С ошибками: ${failed.map((f) => `${f.title}: ${f.error}`).join('; ')}`, true);
-    }
-    const okResults = results.filter((r) => r.ok);
-    if (okResults.length) {
-      const total = okResults.reduce((sum, r) => sum + (r.mentioned || 0), 0);
-      flash(okEl, `Hard Pull отправлен в ${okResults.length} групп(у), упомянуто участников: ${total}.`);
-    }
-  } catch (err) {
-    flash(errEl, err.message, true);
-  }
-}
-
-document.getElementById('hardPullSelectedBtn').addEventListener('click', () => {
-  const ids = [...document.querySelectorAll('.caplist-group-checkbox:checked')].map((cb) => Number(cb.value));
-  hardPullGroups(ids);
-});
-document.getElementById('hardPullAllBtn').addEventListener('click', () => {
-  hardPullGroups(groups.map((g) => g.id));
-});
-
 function formatCapListLocation(entry) {
   return entry.city ? `${entry.city}, ${entry.state}` : entry.state;
 }
@@ -653,6 +617,10 @@ document.getElementById('distanceCopyBtn').addEventListener('click', async () =>
 // ================= EMAIL SENDER =================
 
 let brokers = [];
+let mailboxes = [];
+let editingBrokerId = null;
+const brokerFilters = { rating: 'all', shift: 'all', shuttle: false, notBroker: false, online: false };
+let brokerSearchTimer = null;
 
 const smtpPresets = {
   gmail: { host: 'smtp.gmail.com', port: 587, secure: false },
@@ -669,22 +637,55 @@ document.querySelectorAll('[data-preset]').forEach((btn) => {
   });
 });
 
-async function refreshMailStatus() {
-  const status = await api('/api/email/status');
-  if (status.connected) {
-    document.getElementById('mailAccountEmail').textContent = status.email;
-    show(document.getElementById('mailConnectedBlock'));
-    hide(document.getElementById('mailConnectForm'));
-  } else {
-    hide(document.getElementById('mailConnectedBlock'));
-    show(document.getElementById('mailConnectForm'));
+// ---- Mailboxes (up to 5 per user) ----
+
+async function refreshMailboxes() {
+  mailboxes = await api('/api/email/mailboxes');
+  const listEl = document.getElementById('mailboxList');
+  const sendFromSel = document.getElementById('mailSendFrom');
+  listEl.innerHTML = '';
+  sendFromSel.innerHTML = '';
+  document.getElementById('mailboxEmptyMsg').style.display = mailboxes.length ? 'none' : 'block';
+
+  for (const mb of mailboxes) {
+    const row = document.createElement('div');
+    row.className = 'mailbox-row';
+    row.innerHTML = `
+      <span class="mailbox-label">${escapeHtml(mb.label)}</span>
+      <span class="mailbox-email">${escapeHtml(mb.email)}</span>
+      ${mb.isDefault ? '<span class="badge">по умолчанию</span>' : `<button class="btn-secondary set-default-btn" data-id="${mb.id}">Сделать основным</button>`}
+      <button class="btn-danger remove-mailbox-btn" data-id="${mb.id}" style="margin-left:auto;">Удалить</button>
+    `;
+    listEl.appendChild(row);
+
+    const opt = document.createElement('option');
+    opt.value = mb.id;
+    opt.textContent = `${mb.label} (${mb.email})`;
+    if (mb.isDefault) opt.selected = true;
+    sendFromSel.appendChild(opt);
   }
+
+  listEl.querySelectorAll('.set-default-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/email/mailboxes/${btn.dataset.id}/default`, { method: 'POST' });
+      await refreshMailboxes();
+    });
+  });
+  listEl.querySelectorAll('.remove-mailbox-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/email/mailboxes/${btn.dataset.id}`, { method: 'DELETE' });
+      await refreshMailboxes();
+    });
+  });
+
+  document.getElementById('mailConnectBtn').disabled = mailboxes.length >= 5;
 }
 
 document.getElementById('mailConnectBtn').addEventListener('click', async () => {
   const errEl = document.getElementById('mailError');
   hide(errEl);
   const payload = {
+    label: document.getElementById('mailLabel').value.trim(),
     email: document.getElementById('mailEmail').value.trim(),
     smtpUser: document.getElementById('mailUser').value.trim() || document.getElementById('mailEmail').value.trim(),
     smtpPass: document.getElementById('mailPass').value,
@@ -693,70 +694,323 @@ document.getElementById('mailConnectBtn').addEventListener('click', async () => 
     smtpSecure: document.getElementById('mailSecure').checked,
   };
   try {
-    await api('/api/email/connect', { method: 'POST', body: JSON.stringify(payload) });
-    flash(document.getElementById('mailSuccess'), 'Почта подключена!');
-    await refreshMailStatus();
+    await api('/api/email/mailboxes', { method: 'POST', body: JSON.stringify(payload) });
+    flash(document.getElementById('mailSuccess'), 'Почтовый ящик подключён!');
+    ['mailLabel', 'mailEmail', 'mailUser', 'mailPass', 'mailHost', 'mailPort'].forEach(
+      (id) => (document.getElementById(id).value = '')
+    );
+    document.getElementById('mailSecure').checked = false;
+    await refreshMailboxes();
   } catch (err) {
     flash(errEl, err.message, true);
   }
 });
 
-document.getElementById('mailDisconnectBtn').addEventListener('click', async () => {
-  await api('/api/email/disconnect', { method: 'POST' });
-  await refreshMailStatus();
-});
+// ---- Brokers (shared/global list) ----
 
-async function refreshBrokers() {
-  brokers = await api('/api/email/brokers');
-  const tbody = document.getElementById('brokersTableBody');
-  tbody.innerHTML = '';
-  document.getElementById('brokersEmptyMsg').style.display = brokers.length ? 'none' : 'block';
+function starsHtml(rating) {
+  if (rating === null || rating === undefined) return '<span class="broker-stars">☆☆☆☆☆</span>';
+  if (rating >= 5) return '<span class="broker-stars elite">★★★★★</span>';
+  return `<span class="broker-stars has-rating">${'★'.repeat(rating)}${'☆'.repeat(5 - rating)}</span>`;
+}
 
-  for (const b of brokers) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="checkbox-cell"><input type="checkbox" class="broker-checkbox" value="${b.id}" /></td>
-      <td>${escapeHtml(b.first_name)}</td>
-      <td>${escapeHtml(b.last_name)}</td>
-      <td>${escapeHtml(b.work_hours || '')}</td>
-      <td>${escapeHtml(b.email)}</td>
-      <td><button class="btn-secondary remove-broker-btn" data-id="${b.id}">Удалить</button></td>
-    `;
-    tbody.appendChild(tr);
+function pctClass(pct) {
+  if (pct >= 50) return 'pct-high';
+  if (pct >= 25) return 'pct-mid';
+  return 'pct-low';
+}
+
+function brokerDisplayName(b) {
+  return b.lastName ? `${b.lastName}, ${b.firstName}` : b.firstName;
+}
+
+function brokerMatchesFilters(b) {
+  if (brokerFilters.rating !== 'all') {
+    const want = Number(brokerFilters.rating);
+    const have = b.rating === null || b.rating === undefined ? 0 : b.rating;
+    if (want !== have) return false;
   }
+  if (brokerFilters.shift !== 'all' && b.shift !== brokerFilters.shift) return false;
+  if (brokerFilters.shuttle && !b.shuttle) return false;
+  if (brokerFilters.online && !b.isOnline) return false;
 
-  tbody.querySelectorAll('.remove-broker-btn').forEach((btn) => {
+  const search = document.getElementById('brokerSearch').value.trim().toLowerCase();
+  if (search) {
+    const scope = document.getElementById('brokerSearchScope').value;
+    const name = brokerDisplayName(b).toLowerCase();
+    const email = b.email.toLowerCase();
+    const hit =
+      scope === 'name' ? name.includes(search) : scope === 'email' ? email.includes(search) : name.includes(search) || email.includes(search);
+    if (!hit) return false;
+  }
+  return true;
+}
+
+function renderBrokerRow(b) {
+  const wrap = document.createElement('div');
+  wrap.className = 'broker-row';
+  const name = brokerDisplayName(b);
+  wrap.innerHTML = `
+    <div class="broker-row-main">
+      <input type="checkbox" class="broker-checkbox" value="${b.id}" />
+      <span class="broker-online-dot ${b.isOnline ? 'online' : ''}"></span>
+      <span class="broker-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+      ${b.isNew ? '<span class="broker-badge-new">NEW</span>' : ''}
+      <span class="broker-badge-pct ${pctClass(b.percentage)}">${b.percentage}%</span>
+      ${starsHtml(b.rating)}
+      <button class="btn-primary broker-mail-btn" data-id="${b.id}" title="Выбрать для отправки">✉ Mail</button>
+      <button class="broker-expand-btn" data-id="${b.id}">▾</button>
+    </div>
+    <div class="broker-row-details" id="brokerDetails-${b.id}">
+      <dl>
+        <dt>Email</dt><dd>${escapeHtml(b.email)}</dd>
+        <dt>Часы</dt><dd>${b.hoursFrom && b.hoursTo ? `${b.hoursFrom}–${b.hoursTo}` : '—'}</dd>
+        <dt>Дни</dt><dd>${b.workingDays.length ? b.workingDays.join(', ') : '—'}</dd>
+        <dt>Shuttle</dt><dd>${b.shuttle ? 'Да' : 'Нет'}</dd>
+        <dt>День рождения</dt><dd>${b.birthday || '—'}</dd>
+        <dt>Заметки</dt><dd>${escapeHtml(b.notes || '—')}</dd>
+        <dt>Успешность рассылок</dt><dd>${b.percentage}% (${b.sendCount} писем)</dd>
+      </dl>
+      ${
+        currentUser.isAdmin
+          ? `<div class="toolbar">
+        <button class="btn-secondary toggle-online-btn" data-id="${b.id}" data-online="${b.isOnline ? 0 : 1}">${
+              b.isOnline ? 'Отметить оффлайн' : 'Отметить онлайн'
+            }</button>
+        <button class="btn-secondary edit-broker-btn" data-id="${b.id}">Редактировать</button>
+        <button class="btn-danger remove-broker-btn" data-id="${b.id}">Удалить</button>
+      </div>`
+          : ''
+      }
+    </div>
+  `;
+  return wrap;
+}
+
+function wireBrokerRowEvents() {
+  document.querySelectorAll('.broker-expand-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.getElementById(`brokerDetails-${btn.dataset.id}`).classList.toggle('open');
+    });
+  });
+  document.querySelectorAll('.broker-mail-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.broker-checkbox').forEach((cb) => (cb.checked = cb.value === btn.dataset.id));
+      document.getElementById('mailSubject').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+  document.querySelectorAll('.toggle-online-btn').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      await api(`/api/email/brokers/${btn.dataset.id}/online`, {
+        method: 'POST',
+        body: JSON.stringify({ online: btn.dataset.online === '1' }),
+      });
+      await refreshBrokers();
+    });
+  });
+  document.querySelectorAll('.edit-broker-btn').forEach((btn) => {
+    btn.addEventListener('click', () => openBrokerModal(brokers.find((b) => b.id === Number(btn.dataset.id))));
+  });
+  document.querySelectorAll('.remove-broker-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Удалить брокера?')) return;
       await api(`/api/email/brokers/${btn.dataset.id}`, { method: 'DELETE' });
       await refreshBrokers();
     });
   });
 }
 
-document.getElementById('addBrokerBtn').addEventListener('click', async () => {
+function renderBrokers() {
+  const filtered = brokers.filter(brokerMatchesFilters);
+  const dayList = document.getElementById('brokerListDay');
+  const nightList = document.getElementById('brokerListNight');
+  dayList.innerHTML = '';
+  nightList.innerHTML = '';
+
+  const dayBrokers = filtered.filter((b) => b.shift !== 'night');
+  const nightBrokers = filtered.filter((b) => b.shift === 'night');
+
+  document.getElementById('brokerCountDay').textContent = dayBrokers.length;
+  document.getElementById('brokerCountNight').textContent = nightBrokers.length;
+
+  for (const b of dayBrokers) dayList.appendChild(renderBrokerRow(b));
+  for (const b of nightBrokers) nightList.appendChild(renderBrokerRow(b));
+
+  document.getElementById('brokersEmptyMsg').style.display = brokers.length ? 'none' : 'block';
+  wireBrokerRowEvents();
+}
+
+async function refreshBrokers() {
+  brokers = await api('/api/email/brokers');
+  renderBrokers();
+}
+
+document.querySelectorAll('#brokerRatingFilters .tab-toggle-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#brokerRatingFilters .tab-toggle-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    brokerFilters.rating = btn.dataset.rating;
+    renderBrokers();
+  });
+});
+document.querySelectorAll('#brokerShiftFilters .tab-toggle-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#brokerShiftFilters .tab-toggle-btn').forEach((b) => b.classList.remove('active'));
+    btn.classList.add('active');
+    brokerFilters.shift = btn.dataset.shift;
+    renderBrokers();
+  });
+});
+document.querySelectorAll('#brokerToggleFilters .tab-toggle-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    btn.classList.toggle('active');
+    brokerFilters[btn.dataset.toggle] = btn.classList.contains('active');
+    renderBrokers();
+  });
+});
+document.getElementById('brokerSearch').addEventListener('input', () => {
+  clearTimeout(brokerSearchTimer);
+  brokerSearchTimer = setTimeout(renderBrokers, 200);
+});
+document.getElementById('brokerSearchScope').addEventListener('change', renderBrokers);
+
+// ---- Add/edit broker modal ----
+
+function setSegmented(containerId, dataAttr, value) {
+  document.querySelectorAll(`#${containerId} .segmented-btn`).forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset[dataAttr] === String(value ?? ''));
+  });
+}
+
+document.querySelectorAll('#brokerShiftPicker .segmented-btn').forEach((btn) => {
+  btn.addEventListener('click', () => setSegmented('brokerShiftPicker', 'shift', btn.dataset.shift));
+});
+document.querySelectorAll('#brokerRatingPicker .segmented-btn').forEach((btn) => {
+  btn.addEventListener('click', () => setSegmented('brokerRatingPicker', 'rating', btn.dataset.rating));
+});
+document.querySelectorAll('#brokerDaysPicker .segmented-btn').forEach((btn) => {
+  btn.addEventListener('click', () => btn.classList.toggle('active'));
+});
+
+function resetBrokerModal() {
+  editingBrokerId = null;
+  document.getElementById('brokerModalTitle').textContent = 'Добавить брокера';
+  document.getElementById('brokerName').value = '';
+  document.getElementById('brokerEmailInput').value = '';
+  setSegmented('brokerShiftPicker', 'shift', '');
+  document.getElementById('brokerHoursFrom').value = '09:00';
+  document.getElementById('brokerHoursTo').value = '21:00';
+  document.querySelectorAll('#brokerDaysPicker .segmented-btn').forEach((b) => b.classList.remove('active'));
+  setSegmented('brokerRatingPicker', 'rating', '');
+  document.getElementById('brokerShuttle').checked = false;
+  document.getElementById('brokerBirthday').value = '';
+  document.getElementById('brokerNotes').value = '';
+  hide(document.getElementById('brokerModalError'));
+}
+
+function openBrokerModal(broker) {
+  resetBrokerModal();
+  if (broker) {
+    editingBrokerId = broker.id;
+    document.getElementById('brokerModalTitle').textContent = 'Редактировать брокера';
+    document.getElementById('brokerName').value = brokerDisplayName(broker);
+    document.getElementById('brokerEmailInput').value = broker.email;
+    setSegmented('brokerShiftPicker', 'shift', broker.shift || '');
+    document.getElementById('brokerHoursFrom').value = broker.hoursFrom || '09:00';
+    document.getElementById('brokerHoursTo').value = broker.hoursTo || '21:00';
+    document.querySelectorAll('#brokerDaysPicker .segmented-btn').forEach((b) => {
+      b.classList.toggle('active', broker.workingDays.includes(b.dataset.day));
+    });
+    setSegmented('brokerRatingPicker', 'rating', broker.rating ?? '');
+    document.getElementById('brokerShuttle').checked = broker.shuttle;
+    document.getElementById('brokerBirthday').value = broker.birthday || '';
+    document.getElementById('brokerNotes').value = broker.notes || '';
+  }
+  document.getElementById('brokerModalOverlay').style.display = 'flex';
+}
+
+document.getElementById('addBrokerOpenBtn').addEventListener('click', () => openBrokerModal(null));
+document.getElementById('brokerModalCancelBtn').addEventListener('click', () => {
+  document.getElementById('brokerModalOverlay').style.display = 'none';
+});
+
+document.getElementById('brokerModalSaveBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('brokerModalError');
+  hide(errEl);
+  const nameRaw = document.getElementById('brokerName').value.trim();
+  const email = document.getElementById('brokerEmailInput').value.trim();
+  if (!nameRaw || !email) return flash(errEl, 'Укажите имя и email.', true);
+
+  let lastName = '';
+  let firstName = nameRaw;
+  if (nameRaw.includes(',')) {
+    const [last, first] = nameRaw.split(',');
+    lastName = last.trim();
+    firstName = (first || '').trim();
+  }
+
+  const shiftBtn = document.querySelector('#brokerShiftPicker .segmented-btn.active');
+  const ratingBtn = document.querySelector('#brokerRatingPicker .segmented-btn.active');
+  const days = [...document.querySelectorAll('#brokerDaysPicker .segmented-btn.active')].map((b) => b.dataset.day);
+
   const payload = {
-    firstName: document.getElementById('brokerFirstName').value.trim(),
-    lastName: document.getElementById('brokerLastName').value.trim(),
-    workHours: document.getElementById('brokerWorkHours').value.trim(),
-    email: document.getElementById('brokerEmail').value.trim(),
+    firstName,
+    lastName,
+    email,
+    shift: shiftBtn && shiftBtn.dataset.shift ? shiftBtn.dataset.shift : null,
+    hoursFrom: document.getElementById('brokerHoursFrom').value,
+    hoursTo: document.getElementById('brokerHoursTo').value,
+    workingDays: days,
+    rating: ratingBtn && ratingBtn.dataset.rating ? Number(ratingBtn.dataset.rating) : null,
+    shuttle: document.getElementById('brokerShuttle').checked,
+    birthday: document.getElementById('brokerBirthday').value || null,
+    notes: document.getElementById('brokerNotes').value.trim(),
   };
+
   try {
-    await api('/api/email/brokers', { method: 'POST', body: JSON.stringify(payload) });
-    ['brokerFirstName', 'brokerLastName', 'brokerWorkHours', 'brokerEmail'].forEach(
-      (id) => (document.getElementById(id).value = '')
-    );
+    if (editingBrokerId) {
+      await api(`/api/email/brokers/${editingBrokerId}`, { method: 'PUT', body: JSON.stringify(payload) });
+    } else {
+      await api('/api/email/brokers', { method: 'POST', body: JSON.stringify(payload) });
+    }
+    document.getElementById('brokerModalOverlay').style.display = 'none';
     await refreshBrokers();
   } catch (err) {
-    flash(document.getElementById('mailError'), err.message, true);
+    flash(errEl, err.message, true);
   }
 });
 
-document.getElementById('selectAllBrokers').addEventListener('change', (e) => {
-  document.querySelectorAll('.broker-checkbox').forEach((cb) => (cb.checked = e.target.checked));
+// ---- CSV import ----
+
+document.getElementById('importCsvBtn').addEventListener('click', () => {
+  document.getElementById('importCsvFile').click();
 });
+document.getElementById('importCsvFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  const errEl = document.getElementById('brokerActionError');
+  const okEl = document.getElementById('brokerActionSuccess');
+  hide(errEl); hide(okEl);
+  try {
+    const result = await api('/api/email/brokers/import', { method: 'POST', body: JSON.stringify({ csv: text }) });
+    if (result.errors.length) {
+      flash(errEl, `Импортировано: ${result.imported}. Ошибки: ${result.errors.join('; ')}`, true);
+    } else {
+      flash(okEl, `Импортировано брокеров: ${result.imported}.`);
+    }
+    await refreshBrokers();
+  } catch (err) {
+    flash(errEl, err.message, true);
+  } finally {
+    e.target.value = '';
+  }
+});
+
+// ---- Selecting + sending ----
+
 document.getElementById('selectAllBrokersSendBtn').addEventListener('click', () => {
   document.querySelectorAll('.broker-checkbox').forEach((cb) => (cb.checked = true));
-  document.getElementById('selectAllBrokers').checked = true;
 });
 
 function getSelectedBrokerIds() {
@@ -773,12 +1027,13 @@ async function sendMail(brokerIds) {
   if (!subject || !text) return flash(errEl, 'Заполните тему и текст письма.', true);
   if (!brokerIds.length) return flash(errEl, 'Выберите хотя бы одного брокера.', true);
 
-  const delaySeconds = Number(document.getElementById('mailSendDelay').value) || 0;
+  const mailboxId = Number(document.getElementById('mailSendFrom').value) || undefined;
+  const delaySeconds = Math.max(2, Number(document.getElementById('mailSendDelay').value) || 2);
 
   try {
     const { results } = await api('/api/email/send', {
       method: 'POST',
-      body: JSON.stringify({ brokerIds, subject, text, delaySeconds }),
+      body: JSON.stringify({ mailboxId, brokerIds, subject, text, delaySeconds }),
     });
     const failed = results.filter((r) => !r.ok);
     if (failed.length) {
@@ -786,6 +1041,7 @@ async function sendMail(brokerIds) {
     } else {
       flash(okEl, `Письмо отправлено ${results.length} брокер(ам).`);
     }
+    await refreshBrokers();
   } catch (err) {
     flash(errEl, err.message, true);
   }
@@ -794,8 +1050,76 @@ async function sendMail(brokerIds) {
 document.getElementById('sendToSelectedBrokersBtn').addEventListener('click', () => sendMail(getSelectedBrokerIds()));
 document.getElementById('sendToAllBrokersBtn').addEventListener('click', () => sendMail(brokers.map((b) => b.id)));
 
+// ================= ADMIN =================
+
+async function refreshUsers() {
+  let users;
+  try {
+    users = await api('/api/admin/users');
+  } catch {
+    return;
+  }
+  const tbody = document.getElementById('usersTableBody');
+  tbody.innerHTML = '';
+  for (const u of users) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(u.email)}</td>
+      <td>${u.isAdmin ? '<span class="badge">admin</span>' : ''}</td>
+      <td>${u.createdAt}</td>
+      <td>
+        <button class="btn-secondary reset-pass-btn" data-id="${u.id}">Сбросить пароль</button>
+        ${!u.isAdmin ? `<button class="btn-danger remove-user-btn" data-id="${u.id}">Удалить</button>` : ''}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  tbody.querySelectorAll('.reset-pass-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const { email, password } = await api(`/api/admin/users/${btn.dataset.id}/reset-password`, { method: 'POST' });
+      showNewUserResult(email, password);
+    });
+  });
+  tbody.querySelectorAll('.remove-user-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Удалить доступ этого пользователя?')) return;
+      try {
+        await api(`/api/admin/users/${btn.dataset.id}`, { method: 'DELETE' });
+        await refreshUsers();
+      } catch (err) {
+        flash(document.getElementById('adminError'), err.message, true);
+      }
+    });
+  });
+}
+
+function showNewUserResult(email, password) {
+  const el = document.getElementById('newUserResult');
+  el.innerHTML = `Логин: <b>${escapeHtml(email)}</b> — Пароль: <b>${escapeHtml(password)}</b> (скопируйте сейчас, повторно не показывается)`;
+  show(el);
+}
+
+document.getElementById('addUserBtn').addEventListener('click', async () => {
+  const errEl = document.getElementById('adminError');
+  hide(errEl);
+  const email = document.getElementById('newUserEmail').value.trim();
+  if (!email) return;
+  try {
+    const { email: createdEmail, password } = await api('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+    document.getElementById('newUserEmail').value = '';
+    showNewUserResult(createdEmail, password);
+    await refreshUsers();
+  } catch (err) {
+    flash(errEl, err.message, true);
+  }
+});
+
 // ---------- init ----------
 
 (async function init() {
-  await Promise.all([refreshTgStatus(), refreshGroups(), refreshMessages(), refreshMailStatus(), refreshBrokers(), loadCapList()]);
+  await Promise.all([refreshTgStatus(), refreshGroups(), refreshMessages(), refreshMailboxes(), refreshBrokers(), loadCapList()]);
 })();

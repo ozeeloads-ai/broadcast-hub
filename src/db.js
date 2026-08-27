@@ -1,5 +1,7 @@
 const path = require('path');
 const Database = require('better-sqlite3');
+const bcrypt = require('bcryptjs');
+const { generatePassword } = require('./crypto');
 
 // DB_PATH lets us point the database at a mounted persistent volume in
 // production (e.g. Railway) instead of the app's own ephemeral filesystem.
@@ -60,15 +62,44 @@ CREATE TABLE IF NOT EXISTS email_accounts (
   connected_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS brokers (
+-- Replaces email_accounts: lets each user connect several mailboxes (up to 5)
+-- and pick which one to send a given broadcast from.
+CREATE TABLE IF NOT EXISTS email_mailboxes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label TEXT,
+  email TEXT NOT NULL,
+  smtp_host TEXT NOT NULL,
+  smtp_port INTEGER NOT NULL,
+  smtp_secure INTEGER NOT NULL DEFAULT 0,
+  smtp_user TEXT NOT NULL,
+  smtp_pass TEXT NOT NULL,     -- encrypted
+  is_default INTEGER NOT NULL DEFAULT 0,
+  connected_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mailboxes_user ON email_mailboxes(user_id);
+
+-- Brokers are shared/global: any logged-in user can see the list, but only
+-- an admin can add/edit/remove entries (enforced in the routes, not here).
+CREATE TABLE IF NOT EXISTS brokers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, -- who added it
   first_name TEXT NOT NULL,
   last_name TEXT NOT NULL,
   work_hours TEXT,
   email TEXT NOT NULL,
   added_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Logs every send attempt to a broker so we can compute a per-broker success %.
+CREATE TABLE IF NOT EXISTS broker_send_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  broker_id INTEGER NOT NULL REFERENCES brokers(id) ON DELETE CASCADE,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+  success INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_broker_send_log_broker ON broker_send_log(broker_id);
 
 -- Cap List: incoming Telegram messages from monitored groups get scanned for
 -- lines like "Las Vegas NV Solo" / "CA Team" and logged here so dispatchers
@@ -87,5 +118,77 @@ CREATE TABLE IF NOT EXISTS cap_list_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_cap_list_user ON cap_list_entries(user_id);
 `);
+
+// ---- Lightweight migrations: add columns that didn't exist in older DBs ----
+
+function ensureColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+ensureColumn('users', 'email', 'TEXT');
+ensureColumn('users', 'is_admin', 'INTEGER NOT NULL DEFAULT 0');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+
+ensureColumn('brokers', 'rating', 'INTEGER'); // 0-4 = star count, 5 = "5★ ELITE", NULL = none
+ensureColumn('brokers', 'shift', 'TEXT'); // 'day' | 'night' | NULL
+ensureColumn('brokers', 'hours_from', 'TEXT');
+ensureColumn('brokers', 'hours_to', 'TEXT');
+ensureColumn('brokers', 'working_days', 'TEXT'); // comma-separated: Mo,Tu,We,...
+ensureColumn('brokers', 'shuttle', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('brokers', 'is_online', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('brokers', 'birthday', 'TEXT');
+ensureColumn('brokers', 'notes', 'TEXT');
+
+// One-time copy of any legacy single-mailbox rows into the new multi-mailbox
+// table, so users who connected mail before this update don't lose it.
+const legacyAccounts = db.prepare('SELECT * FROM email_accounts').all();
+for (const acc of legacyAccounts) {
+  const already = db
+    .prepare('SELECT id FROM email_mailboxes WHERE user_id = ? AND smtp_user = ? AND smtp_host = ?')
+    .get(acc.user_id, acc.smtp_user, acc.smtp_host);
+  if (already) continue;
+  db.prepare(
+    `INSERT INTO email_mailboxes (user_id, label, email, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_pass, is_default, connected_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`
+  ).run(acc.user_id, 'Основной', acc.email, acc.smtp_host, acc.smtp_port, acc.smtp_secure, acc.smtp_user, acc.smtp_pass, acc.connected_at);
+}
+
+// ---- Admin bootstrap ----
+// Access is admin-controlled only: nobody can self-register. The one
+// account named by ADMIN_EMAIL (in .env) is promoted to admin on every
+// startup, and created automatically the first time if it doesn't exist yet.
+function ensureAdminUser() {
+  const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  if (!email) return;
+
+  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (existing) {
+    if (!existing.is_admin) db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(existing.id);
+    return;
+  }
+
+  const password = (process.env.ADMIN_PASSWORD || '').trim() || generatePassword(12);
+  const hash = bcrypt.hashSync(password, 10);
+  db.prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(
+    email,
+    email,
+    hash
+  );
+
+  if (!process.env.ADMIN_PASSWORD) {
+    console.log('================================================');
+    console.log(' Admin-аккаунт создан:');
+    console.log(` Email:  ${email}`);
+    console.log(` Пароль: ${password}`);
+    console.log(' Сохраните пароль сейчас — он больше нигде не показывается.');
+    console.log(' (Чтобы задать свой пароль, добавьте ADMIN_PASSWORD в .env и перезапустите.)');
+    console.log('================================================');
+  }
+}
+
+ensureAdminUser();
 
 module.exports = db;

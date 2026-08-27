@@ -4,6 +4,7 @@ const express = require('express');
 const session = require('express-session');
 
 const authRoutes = require('./src/routes/auth');
+const adminRoutes = require('./src/routes/admin');
 const telegramRoutes = require('./src/routes/telegram');
 const emailRoutes = require('./src/routes/email');
 const distanceRoutes = require('./src/routes/distance');
@@ -33,6 +34,7 @@ app.use(
 );
 
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/telegram', telegramRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/distance', distanceRoutes);

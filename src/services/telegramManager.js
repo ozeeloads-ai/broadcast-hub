@@ -546,79 +546,6 @@ function clearCapList(userId) {
   db.prepare('DELETE FROM cap_list_entries WHERE user_id = ?').run(userId);
 }
 
-// ---- Hard Pull: @-mention every member of a group (except an exclude list) ----
-
-const HARD_PULL_TEXT = 'Please share cap list , lets books some loads';
-
-const HARD_PULL_EXCLUDED_USERNAMES = [
-  'LB_Mark',
-  'zamkgz',
-  'babazavrrrrr',
-  'Islam_cold_loads',
-  'rashland_force',
-  'benjamin_1207',
-  'Eddy_x993',
-];
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function hardPullGroups(userId, groupIds, delaySeconds = 0) {
-  const client = await getClient(userId);
-  const delayMs = Math.min(5, Math.max(0, Number(delaySeconds) || 0)) * 1000;
-  const excludeSet = new Set(HARD_PULL_EXCLUDED_USERNAMES.map((u) => u.replace(/^@/, '').toLowerCase()));
-  const groups = db
-    .prepare(`SELECT * FROM telegram_groups WHERE user_id = ? AND id IN (${groupIds.map(() => '?').join(',')})`)
-    .all(userId, ...groupIds);
-
-  const results = [];
-  for (let i = 0; i < groups.length; i++) {
-    const group = groups[i];
-    if (i > 0 && delayMs > 0) await sleep(delayMs);
-    try {
-      if (group.peer_type === 'user') {
-        throw new Error('Hard Pull доступен только для групп и каналов.');
-      }
-      const peer = buildInputPeer(group);
-      const participants = await client.getParticipants(peer, { limit: 5000 });
-
-      const targets = participants.filter((p) => {
-        if (!p || p.className !== 'User') return false;
-        if (p.bot || p.self || p.deleted) return false;
-        if (p.username && excludeSet.has(p.username.toLowerCase())) return false;
-        return true;
-      });
-
-      // Visible text stays short; each excluded-free member gets a hidden
-      // (zero-width) mention entity so Telegram still notifies them.
-      let text = HARD_PULL_TEXT + '\n';
-      const entities = [];
-      for (const user of targets) {
-        if (!user.accessHash) continue; // need an access hash to build a valid mention
-        entities.push(
-          new Api.InputMessageEntityMentionName({
-            offset: text.length,
-            length: 1,
-            userId: new Api.InputUser({ userId: user.id, accessHash: user.accessHash }),
-          })
-        );
-        text += '​';
-      }
-
-      const message = await client.sendMessage(peer, { message: text, formattingEntities: entities });
-
-      db.prepare(
-        `INSERT INTO sent_messages (user_id, group_id, chat_id, message_id, text)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(userId, group.id, group.chat_id, message.id, `[Hard Pull] ${HARD_PULL_TEXT} (упомянуто: ${targets.length})`);
-
-      results.push({ groupId: group.id, title: group.title, ok: true, mentioned: targets.length });
-    } catch (err) {
-      results.push({ groupId: group.id, title: group.title, ok: false, error: err.message });
-    }
-  }
-  return results;
-}
-
 module.exports = {
   startLogin,
   submitCode,
@@ -640,7 +567,5 @@ module.exports = {
   listCapListLog,
   capListCounts,
   clearCapList,
-  hardPullGroups,
   CAP_LIST_REQUEST_TEXT,
-  HARD_PULL_TEXT,
 };
