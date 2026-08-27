@@ -160,33 +160,54 @@ for (const acc of legacyAccounts) {
 // Access is admin-controlled only: nobody can self-register. The one
 // account named by ADMIN_EMAIL (in .env) is promoted to admin on every
 // startup, and created automatically the first time if it doesn't exist yet.
+function logGeneratedAdminPassword(email, password) {
+  console.log('================================================');
+  console.log(' Admin-аккаунт готов:');
+  console.log(` Email:  ${email}`);
+  console.log(` Пароль: ${password}`);
+  console.log(' Сохраните пароль сейчас — он больше нигде не показывается.');
+  console.log(' (Чтобы задать свой пароль, добавьте ADMIN_PASSWORD в .env и перезапустите.)');
+  console.log('================================================');
+}
+
 function ensureAdminUser() {
   const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   if (!email) return;
 
-  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
-  if (existing) {
-    if (!existing.is_admin) db.prepare('UPDATE users SET is_admin = 1 WHERE id = ?').run(existing.id);
+  // Look up by email first, but also fall back to matching by username: an
+  // account created before admin-only access existed (the old signup form)
+  // may have this address stored as its "username" with no email set yet.
+  let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (!user) {
+    user = db.prepare('SELECT * FROM users WHERE username = ?').get(email);
+  }
+
+  const explicitPassword = (process.env.ADMIN_PASSWORD || '').trim();
+
+  if (user) {
+    if (user.is_admin) {
+      // Already bootstrapped in a previous run — just backfill email if
+      // missing, and never touch the password on every restart.
+      if (!user.email) db.prepare('UPDATE users SET email = ? WHERE id = ?').run(email, user.id);
+      return;
+    }
+    // First time promoting this (possibly leftover) account to admin: give
+    // it a known password so login is guaranteed to work.
+    const password = explicitPassword || generatePassword(12);
+    const hash = bcrypt.hashSync(password, 10);
+    db.prepare('UPDATE users SET email = ?, is_admin = 1, password_hash = ? WHERE id = ?').run(email, hash, user.id);
+    if (!explicitPassword) logGeneratedAdminPassword(email, password);
     return;
   }
 
-  const password = (process.env.ADMIN_PASSWORD || '').trim() || generatePassword(12);
+  const password = explicitPassword || generatePassword(12);
   const hash = bcrypt.hashSync(password, 10);
   db.prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, 1)').run(
     email,
     email,
     hash
   );
-
-  if (!process.env.ADMIN_PASSWORD) {
-    console.log('================================================');
-    console.log(' Admin-аккаунт создан:');
-    console.log(` Email:  ${email}`);
-    console.log(` Пароль: ${password}`);
-    console.log(' Сохраните пароль сейчас — он больше нигде не показывается.');
-    console.log(' (Чтобы задать свой пароль, добавьте ADMIN_PASSWORD в .env и перезапустите.)');
-    console.log('================================================');
-  }
+  if (!explicitPassword) logGeneratedAdminPassword(email, password);
 }
 
 ensureAdminUser();
