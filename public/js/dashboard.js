@@ -1242,10 +1242,56 @@ function getSelectedBrokerIds() {
   return [...document.querySelectorAll('.broker-checkbox:checked')].map((cb) => Number(cb.value));
 }
 
+// Sending to a long broker list takes a while (each email is spaced out by
+// the delay setting), so the send now runs in the background on the server
+// — this just kicks it off and polls for progress, instead of holding one
+// request open for the whole batch (which was timing out with a 504 on
+// larger lists).
+let mailSendPollTimer = null;
+
+function stopMailSendPolling() {
+  clearTimeout(mailSendPollTimer);
+  mailSendPollTimer = null;
+}
+
+async function pollMailSendJob(jobId) {
+  const okEl = document.getElementById('mailSendSuccess');
+  const errEl = document.getElementById('mailSendError');
+  let job;
+  try {
+    job = await api(`/api/email/send/status/${jobId}`);
+  } catch (err) {
+    stopMailSendPolling();
+    flash(errEl, err.message, true);
+    return;
+  }
+
+  if (job.status === 'done') {
+    stopMailSendPolling();
+    document.getElementById('sendMailBtn').disabled = false;
+    if (job.error) {
+      flash(errEl, `Рассылка прервана: ${job.error}`, true);
+    } else if (job.failCount > 0) {
+      flash(errEl, `Отправлено: ${job.successCount} из ${job.total}. Ошибок: ${job.failCount}.`, true);
+    } else {
+      flash(okEl, `Письмо отправлено ${job.successCount} брокер(ам).`);
+    }
+    await refreshBrokers();
+    return;
+  }
+
+  // Set directly rather than via flash() — flash()'s auto-hide timer would
+  // otherwise race with the next poll and make this message flicker.
+  okEl.textContent = `Отправка: ${job.completed} из ${job.total}…`;
+  okEl.style.display = 'block';
+  mailSendPollTimer = setTimeout(() => pollMailSendJob(jobId), 1500);
+}
+
 async function sendMail(brokerIds) {
   const errEl = document.getElementById('mailSendError');
   const okEl = document.getElementById('mailSendSuccess');
   hide(errEl); hide(okEl);
+  stopMailSendPolling();
 
   const subject = document.getElementById('mailSubject').value.trim();
   const text = document.getElementById('mailBody').value.trim();
@@ -1254,20 +1300,19 @@ async function sendMail(brokerIds) {
 
   const mailboxId = Number(document.getElementById('mailSendFrom').value) || undefined;
   const delaySeconds = Math.max(2, Number(document.getElementById('mailSendDelay').value) || 2);
+  const sendBtn = document.getElementById('sendMailBtn');
 
   try {
-    const { results } = await api('/api/email/send', {
+    sendBtn.disabled = true;
+    const { jobId, total } = await api('/api/email/send', {
       method: 'POST',
       body: JSON.stringify({ mailboxId, brokerIds, subject, text, delaySeconds }),
     });
-    const failed = results.filter((r) => !r.ok);
-    if (failed.length) {
-      flash(errEl, `Отправлено с ошибками: ${failed.map((f) => `${f.email}: ${f.error}`).join('; ')}`, true);
-    } else {
-      flash(okEl, `Письмо отправлено ${results.length} брокер(ам).`);
-    }
-    await refreshBrokers();
+    okEl.textContent = `Отправка запущена: 0 из ${total}…`;
+    okEl.style.display = 'block';
+    mailSendPollTimer = setTimeout(() => pollMailSendJob(jobId), 1000);
   } catch (err) {
+    sendBtn.disabled = false;
     flash(errEl, err.message, true);
   }
 }

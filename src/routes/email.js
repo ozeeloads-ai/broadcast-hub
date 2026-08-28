@@ -95,7 +95,11 @@ router.delete('/brokers/:id', requireAdmin, (req, res) => {
 
 // ---- Send ----
 
-router.post('/send', async (req, res) => {
+// Starts the send in the background and returns immediately — the batch
+// (broker count × per-email delay) can easily take minutes, which was
+// exceeding the reverse proxy's timeout and coming back as a 504 before it
+// had a chance to finish. Poll /send/status/:jobId for progress.
+router.post('/send', (req, res) => {
   try {
     const { mailboxId, brokerIds, subject, text, delaySeconds } = req.body || {};
     if (!Array.isArray(brokerIds) || brokerIds.length === 0) {
@@ -104,11 +108,17 @@ router.post('/send', async (req, res) => {
     if (!subject || !text) {
       return res.status(400).json({ error: 'Заполните тему и текст письма.' });
     }
-    const results = await mailer.sendToBrokers(req.session.userId, mailboxId, brokerIds, subject, text, delaySeconds);
-    res.json({ results });
+    const job = mailer.startSendJob(req.session.userId, mailboxId, brokerIds, subject, text, delaySeconds);
+    res.json(job);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+router.get('/send/status/:jobId', (req, res) => {
+  const job = mailer.getSendJob(req.session.userId, Number(req.params.jobId));
+  if (!job) return res.status(404).json({ error: 'Задача не найдена.' });
+  res.json(job);
 });
 
 module.exports = router;

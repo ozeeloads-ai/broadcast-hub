@@ -112,7 +112,32 @@ function getMailboxForSend(userId, mailboxId) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function sendToBrokers(userId, mailboxId, brokerIds, subject, text, delaySeconds) {
+function serializeSendJob(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    total: row.total,
+    completed: row.completed,
+    successCount: row.success_count,
+    failCount: row.fail_count,
+    status: row.status,
+    error: row.error,
+    createdAt: row.created_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function getSendJob(userId, jobId) {
+  return serializeSendJob(db.prepare('SELECT * FROM email_send_jobs WHERE id = ? AND user_id = ?').get(jobId, userId));
+}
+
+// Validates everything synchronously (so bad input still fails fast with a
+// normal error response), then runs the actual send loop in the background
+// instead of making the HTTP request wait for it — a broker list combined
+// with the per-email delay can take minutes, which was exceeding the
+// reverse proxy's timeout and coming back as a 504 before this had a chance
+// to finish. The client polls getSendJob() for progress instead.
+function startSendJob(userId, mailboxId, brokerIds, subject, text, delaySeconds) {
   const account = getMailboxForSend(userId, mailboxId);
 
   const delayMs =
@@ -122,30 +147,51 @@ async function sendToBrokers(userId, mailboxId, brokerIds, subject, text, delayS
   const brokers = db
     .prepare(`SELECT * FROM brokers WHERE id IN (${brokerIds.map(() => '?').join(',')})`)
     .all(...brokerIds);
+  if (!brokers.length) {
+    throw new Error('Брокеры не найдены.');
+  }
 
   const transporter = buildTransport(account);
-  const logStmt = db.prepare(
-    'INSERT INTO broker_send_log (broker_id, user_id, success) VALUES (?, ?, ?)'
+
+  const jobInfo = db
+    .prepare('INSERT INTO email_send_jobs (user_id, total, status) VALUES (?, ?, ?)')
+    .run(userId, brokers.length, 'running');
+  const jobId = jobInfo.lastInsertRowid;
+
+  const logStmt = db.prepare('INSERT INTO broker_send_log (broker_id, user_id, success) VALUES (?, ?, ?)');
+  const progressStmt = db.prepare(
+    'UPDATE email_send_jobs SET completed = completed + 1, success_count = success_count + ?, fail_count = fail_count + ? WHERE id = ?'
   );
-  const results = [];
-  for (let i = 0; i < brokers.length; i++) {
-    const broker = brokers[i];
-    if (i > 0 && delayMs > 0) await sleep(delayMs);
+  const finishStmt = db.prepare(
+    "UPDATE email_send_jobs SET status = 'done', finished_at = datetime('now') WHERE id = ?"
+  );
+  const failJobStmt = db.prepare(
+    "UPDATE email_send_jobs SET status = 'done', error = ?, finished_at = datetime('now') WHERE id = ?"
+  );
+
+  // Deliberately not awaited — this runs after startSendJob has already
+  // returned the jobId to the caller.
+  (async () => {
     try {
-      await transporter.sendMail({
-        from: account.email,
-        to: broker.email,
-        subject,
-        text,
-      });
-      logStmt.run(broker.id, userId, 1);
-      results.push({ brokerId: broker.id, email: broker.email, ok: true });
+      for (let i = 0; i < brokers.length; i++) {
+        const broker = brokers[i];
+        if (i > 0 && delayMs > 0) await sleep(delayMs);
+        try {
+          await transporter.sendMail({ from: account.email, to: broker.email, subject, text });
+          logStmt.run(broker.id, userId, 1);
+          progressStmt.run(1, 0, jobId);
+        } catch (err) {
+          logStmt.run(broker.id, userId, 0);
+          progressStmt.run(0, 1, jobId);
+        }
+      }
+      finishStmt.run(jobId);
     } catch (err) {
-      logStmt.run(broker.id, userId, 0);
-      results.push({ brokerId: broker.id, email: broker.email, ok: false, error: err.message });
+      failJobStmt.run(err.message, jobId);
     }
-  }
-  return results;
+  })();
+
+  return { jobId, total: brokers.length };
 }
 
 // ---- Broker CRUD (global list; write access gated by requireAdmin in the route) ----
@@ -412,7 +458,8 @@ module.exports = {
   connectMailbox,
   setDefaultMailbox,
   disconnectMailbox,
-  sendToBrokers,
+  startSendJob,
+  getSendJob,
   addBroker,
   listBrokers,
   updateBroker,

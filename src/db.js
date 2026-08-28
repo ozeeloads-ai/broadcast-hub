@@ -101,6 +101,24 @@ CREATE TABLE IF NOT EXISTS broker_send_log (
 );
 CREATE INDEX IF NOT EXISTS idx_broker_send_log_broker ON broker_send_log(broker_id);
 
+-- Broker email sends run in the background instead of holding the HTTP
+-- request open for the whole batch (a big broker list × the per-email delay
+-- easily exceeds a reverse proxy's timeout, which was surfacing as 504s).
+-- This table lets the client poll progress instead.
+CREATE TABLE IF NOT EXISTS email_send_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  total INTEGER NOT NULL,
+  completed INTEGER NOT NULL DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  fail_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'running',
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_email_send_jobs_user ON email_send_jobs(user_id);
+
 -- Cap List Puller: records the last time a user scanned their groups'
 -- message HISTORY (looking backward, not forward) for cap-list lines, so the
 -- UI can show "last pulled: N hours, at HH:MM, found X".
