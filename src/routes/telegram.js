@@ -115,6 +115,29 @@ router.post('/caplist/clear', (req, res) => {
   res.json({ ok: true });
 });
 
+// Mentions every member of the chosen groups and asks them for a load list.
+// Runs in the background (member lookup + several batched messages per group
+// with flood-safe delays); poll /caplist/tagall/status/:jobId for progress.
+router.post('/caplist/tagall', (req, res) => {
+  try {
+    const { groupIds, text, batchSize, delaySeconds, autoDeleteMinutes } = req.body || {};
+    const job = tg.startTagAllJob(req.session.userId, groupIds, text, {
+      batchSize,
+      delaySeconds,
+      autoDeleteMinutes,
+    });
+    res.json(job);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/caplist/tagall/status/:jobId', (req, res) => {
+  const job = tg.getTagAllJob(req.session.userId, Number(req.params.jobId));
+  if (!job) return res.status(404).json({ error: 'Задача не найдена.' });
+  res.json(job);
+});
+
 router.get('/caplist/pull/status', (req, res) => {
   const log = tg.getLastPull(req.session.userId);
   res.json({

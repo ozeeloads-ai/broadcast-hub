@@ -727,6 +727,232 @@ async function pullCapListHistory(userId, hours) {
   return { hours: h, totalFound, groups: perGroup, pulledAt };
 }
 
+// ---- Tag All: @-mention every member of a group to ask for a load list ----
+
+const TAG_ALL_DEFAULT_TEXT = 'Please share your load list';
+const DEFAULT_TAG_BATCH_SIZE = 5;
+const MAX_TAG_BATCH_SIZE = 50;
+const DEFAULT_TAG_DELAY_SECONDS = 3;
+const MIN_TAG_DELAY_SECONDS = 2;
+const MAX_TAG_DELAY_SECONDS = 60;
+const MAX_MEMBERS_PER_GROUP = 1000;
+
+const tagSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function pickUsername(user) {
+  if (user.username) return user.username;
+  // Newer accounts can hold several "collectible" usernames instead of the
+  // single legacy one; any active handle works for an @mention.
+  if (Array.isArray(user.usernames) && user.usernames.length) {
+    const active = user.usernames.find((u) => u && u.active) || user.usernames[0];
+    if (active && active.username) return active.username;
+  }
+  return '';
+}
+
+async function fetchGroupMembers(userId, group) {
+  const client = await getClient(userId);
+  const peer = buildInputPeer(group);
+
+  let myId = null;
+  try {
+    const me = await client.getMe();
+    if (me && me.id) myId = me.id.toString();
+  } catch {
+    // Not fatal: worst case we'd tag ourselves too.
+  }
+
+  const participants = await client.getParticipants(peer, { limit: MAX_MEMBERS_PER_GROUP });
+
+  const members = [];
+  for (const user of participants) {
+    if (!user || !user.id) continue;
+    if (user.bot || user.deleted) continue; // no point pinging bots or dead accounts
+    const id = user.id.toString();
+    if (myId && id === myId) continue; // don't tag yourself
+    members.push({
+      id,
+      accessHash: user.accessHash ? user.accessHash.toString() : null,
+      username: pickUsername(user),
+      firstName: user.firstName || '',
+      lastName: user.lastName || '',
+    });
+  }
+  return members;
+}
+
+// Builds one message mentioning the given members. Anyone with a @username
+// is mentioned as plain text (Telegram links and notifies those itself);
+// anyone without one gets a real "text mention" entity pointing at their user
+// id, which is the only way to notify a username-less account. Entity offsets
+// are UTF-16 code units — exactly what JS string .length counts — so we can
+// read offsets straight off the string as we build it.
+function buildMentionMessage(text, members) {
+  let message = text && text.trim() ? `${text.trim()}\n\n` : '';
+  const entities = [];
+  let mentioned = 0;
+
+  for (const m of members) {
+    const display = m.username
+      ? `@${m.username}`
+      : [m.firstName, m.lastName].filter(Boolean).join(' ').trim();
+    if (!display) continue;
+    if (!m.username && !m.accessHash) continue; // no handle and no id we can address
+
+    if (mentioned > 0) message += ' ';
+    const offset = message.length;
+    message += display;
+    mentioned++;
+
+    if (!m.username) {
+      entities.push(
+        new Api.InputMessageEntityMentionName({
+          offset,
+          length: display.length,
+          userId: new Api.InputUser({
+            userId: BigInt(m.id),
+            accessHash: BigInt(m.accessHash),
+          }),
+        })
+      );
+    }
+  }
+
+  return { message, entities, mentioned };
+}
+
+async function sendMentionMessage(client, userId, group, message, entities, autoDeleteMinutes) {
+  const peer = buildInputPeer(group);
+  // Always pass formattingEntities (even empty) so the library skips its
+  // markdown pass — otherwise underscores in handles like @Sh_Beksultan get
+  // eaten as italics markup.
+  const sent = await client.sendMessage(peer, { message, formattingEntities: entities });
+
+  const autoDeleteAt =
+    autoDeleteMinutes && autoDeleteMinutes > 0
+      ? new Date(Date.now() + autoDeleteMinutes * 60 * 1000).toISOString()
+      : null;
+
+  db.prepare(
+    `INSERT INTO sent_messages (user_id, group_id, chat_id, message_id, text, auto_delete_at)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(userId, group.id, group.chat_id, sent.id, message, autoDeleteAt);
+
+  return sent;
+}
+
+function serializeTagAllJob(row) {
+  if (!row) return null;
+  let details = [];
+  try {
+    details = row.details ? JSON.parse(row.details) : [];
+  } catch {
+    details = [];
+  }
+  return {
+    id: row.id,
+    totalGroups: row.total_groups,
+    completedGroups: row.completed_groups,
+    taggedCount: row.tagged_count,
+    messagesSent: row.messages_sent,
+    status: row.status,
+    error: row.error,
+    details,
+    createdAt: row.created_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function getTagAllJob(userId, jobId) {
+  return serializeTagAllJob(
+    db.prepare('SELECT * FROM tag_all_jobs WHERE id = ? AND user_id = ?').get(jobId, userId)
+  );
+}
+
+function startTagAllJob(userId, groupIds, text, { batchSize, delaySeconds, autoDeleteMinutes } = {}) {
+  if (!Array.isArray(groupIds) || !groupIds.length) {
+    throw new Error('Выберите хотя бы одну группу.');
+  }
+
+  const groups = db
+    .prepare(`SELECT * FROM telegram_groups WHERE user_id = ? AND id IN (${groupIds.map(() => '?').join(',')})`)
+    .all(userId, ...groupIds);
+  if (!groups.length) throw new Error('Группы не найдены.');
+
+  const size = Math.min(MAX_TAG_BATCH_SIZE, Math.max(1, Number(batchSize) || DEFAULT_TAG_BATCH_SIZE));
+  const delayMs =
+    Math.min(
+      MAX_TAG_DELAY_SECONDS,
+      Math.max(MIN_TAG_DELAY_SECONDS, Number(delaySeconds) || DEFAULT_TAG_DELAY_SECONDS)
+    ) * 1000;
+  const messageText = text && text.trim() ? text.trim() : TAG_ALL_DEFAULT_TEXT;
+
+  const jobInfo = db
+    .prepare('INSERT INTO tag_all_jobs (user_id, total_groups, status, details) VALUES (?, ?, ?, ?)')
+    .run(userId, groups.length, 'running', '[]');
+  const jobId = jobInfo.lastInsertRowid;
+
+  const progressStmt = db.prepare(
+    `UPDATE tag_all_jobs SET completed_groups = completed_groups + 1,
+       tagged_count = tagged_count + ?, messages_sent = messages_sent + ?, details = ?
+     WHERE id = ?`
+  );
+  const finishStmt = db.prepare(
+    "UPDATE tag_all_jobs SET status = 'done', finished_at = datetime('now') WHERE id = ?"
+  );
+  const failStmt = db.prepare(
+    "UPDATE tag_all_jobs SET status = 'done', error = ?, finished_at = datetime('now') WHERE id = ?"
+  );
+
+  // Deliberately not awaited — startTagAllJob returns the id immediately and
+  // the client polls getTagAllJob() for progress.
+  (async () => {
+    const details = [];
+    try {
+      const client = await getClient(userId);
+      let firstMessage = true;
+
+      for (const group of groups) {
+        let taggedHere = 0;
+        let sentHere = 0;
+        try {
+          const members = await fetchGroupMembers(userId, group);
+          if (!members.length) {
+            details.push({ title: group.title, ok: false, tagged: 0, error: 'Не удалось получить участников.' });
+            progressStmt.run(0, 0, JSON.stringify(details), jobId);
+            continue;
+          }
+
+          for (let i = 0; i < members.length; i += size) {
+            const batch = members.slice(i, i + size);
+            const { message, entities, mentioned } = buildMentionMessage(messageText, batch);
+            if (!mentioned) continue;
+
+            // Space out every message after the very first one so a long run
+            // doesn't trip Telegram's flood limits.
+            if (!firstMessage) await tagSleep(delayMs);
+            firstMessage = false;
+
+            await sendMentionMessage(client, userId, group, message, entities, autoDeleteMinutes);
+            taggedHere += mentioned;
+            sentHere++;
+          }
+
+          details.push({ title: group.title, ok: true, tagged: taggedHere, messages: sentHere });
+        } catch (err) {
+          details.push({ title: group.title, ok: false, tagged: taggedHere, error: err.message });
+        }
+        progressStmt.run(taggedHere, sentHere, JSON.stringify(details), jobId);
+      }
+      finishStmt.run(jobId);
+    } catch (err) {
+      failStmt.run(err.message, jobId);
+    }
+  })();
+
+  return { jobId, totalGroups: groups.length };
+}
+
 module.exports = {
   startLogin,
   submitCode,
@@ -751,5 +977,9 @@ module.exports = {
   getLastPull,
   pullCapListHistory,
   parseCapListLine,
+  startTagAllJob,
+  getTagAllJob,
+  buildMentionMessage,
   CAP_LIST_REQUEST_TEXT,
+  TAG_ALL_DEFAULT_TEXT,
 };

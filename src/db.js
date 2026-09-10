@@ -119,6 +119,25 @@ CREATE TABLE IF NOT EXISTS email_send_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_email_send_jobs_user ON email_send_jobs(user_id);
 
+-- "Tag all": @-mentions every member of a group to ask for a load list.
+-- Runs in the background like the email batch — fetching members and sending
+-- several batched messages per group with flood-safe delays takes far longer
+-- than an HTTP request should stay open.
+CREATE TABLE IF NOT EXISTS tag_all_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  total_groups INTEGER NOT NULL,
+  completed_groups INTEGER NOT NULL DEFAULT 0,
+  tagged_count INTEGER NOT NULL DEFAULT 0,
+  messages_sent INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'running',
+  error TEXT,
+  details TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tag_all_jobs_user ON tag_all_jobs(user_id);
+
 -- Cap List Puller: records the last time a user scanned their groups'
 -- message HISTORY (looking backward, not forward) for cap-list lines, so the
 -- UI can show "last pulled: N hours, at HH:MM, found X".

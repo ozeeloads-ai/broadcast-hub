@@ -541,6 +541,95 @@ document.getElementById('capListRequestAllBtn').addEventListener('click', () => 
   requestCapList(groups.map((g) => g.id));
 });
 
+// ---- Tag all: @-mention every member of the chosen groups ----
+// Member lookup plus several batched messages per group takes a while, so
+// the server runs it as a background job and we poll for progress here.
+
+let tagAllPollTimer = null;
+
+function stopTagAllPolling() {
+  clearTimeout(tagAllPollTimer);
+  tagAllPollTimer = null;
+}
+
+function setTagAllButtonsDisabled(disabled) {
+  document.getElementById('tagAllSelectedBtn').disabled = disabled;
+  document.getElementById('tagAllGroupsBtn').disabled = disabled;
+}
+
+async function pollTagAllJob(jobId) {
+  const statusEl = document.getElementById('tagAllStatus');
+  const errEl = document.getElementById('capListRequestError');
+  const okEl = document.getElementById('capListRequestSuccess');
+
+  let job;
+  try {
+    job = await api(`/api/telegram/caplist/tagall/status/${jobId}`);
+  } catch (err) {
+    stopTagAllPolling();
+    setTagAllButtonsDisabled(false);
+    flash(errEl, err.message, true);
+    return;
+  }
+
+  if (job.status === 'done') {
+    stopTagAllPolling();
+    setTagAllButtonsDisabled(false);
+    const failed = (job.details || []).filter((d) => !d.ok);
+    statusEl.textContent = `Готово: отмечено ${job.taggedCount} участник(ов) в ${job.totalGroups} групп(е), сообщений отправлено: ${job.messagesSent}.`;
+    if (job.error) {
+      flash(errEl, `Не удалось: ${job.error}`, true);
+    } else if (failed.length) {
+      flash(errEl, `С ошибками: ${failed.map((f) => `${f.title}: ${f.error}`).join('; ')}`, true);
+    } else {
+      flash(okEl, `Отмечено ${job.taggedCount} участник(ов).`);
+    }
+    await refreshCapListSentMessages();
+    return;
+  }
+
+  statusEl.textContent = `Тегаю: группа ${job.completedGroups} из ${job.totalGroups}, отмечено ${job.taggedCount}…`;
+  tagAllPollTimer = setTimeout(() => pollTagAllJob(jobId), 1500);
+}
+
+async function tagAllInGroups(groupIds) {
+  const errEl = document.getElementById('capListRequestError');
+  const okEl = document.getElementById('capListRequestSuccess');
+  const statusEl = document.getElementById('tagAllStatus');
+  hide(errEl); hide(okEl);
+  stopTagAllPolling();
+
+  if (!groupIds.length) return flash(errEl, 'Выберите хотя бы одну группу.', true);
+
+  const payload = {
+    groupIds,
+    text: document.getElementById('tagAllText').value.trim(),
+    batchSize: Number(document.getElementById('tagAllBatchSize').value) || 5,
+    delaySeconds: Number(document.getElementById('tagAllDelay').value) || 3,
+  };
+
+  try {
+    setTagAllButtonsDisabled(true);
+    const { jobId, totalGroups } = await api('/api/telegram/caplist/tagall', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    statusEl.textContent = `Запущено: групп ${totalGroups}…`;
+    tagAllPollTimer = setTimeout(() => pollTagAllJob(jobId), 1000);
+  } catch (err) {
+    setTagAllButtonsDisabled(false);
+    flash(errEl, err.message, true);
+  }
+}
+
+document.getElementById('tagAllSelectedBtn').addEventListener('click', () => {
+  const ids = [...document.querySelectorAll('.caplist-group-checkbox:checked')].map((cb) => Number(cb.value));
+  tagAllInGroups(ids);
+});
+document.getElementById('tagAllGroupsBtn').addEventListener('click', () => {
+  tagAllInGroups(groups.map((g) => g.id));
+});
+
 function formatCapListLocation(entry) {
   return entry.city ? `${entry.city}, ${entry.state}` : entry.state;
 }

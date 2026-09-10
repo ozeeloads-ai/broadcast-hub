@@ -489,6 +489,29 @@
     <div class="error-msg" id="capListRequestError"></div>
     <div class="success-msg" id="capListRequestSuccess"></div>
 
+    <p class="hint" style="margin-top:20px;">Тегнуть всех — соберёт участников выбранных выше групп и отметит их (@ник) в сообщении с запросом. Участников без @ника отметит по имени — им тоже придёт уведомление.</p>
+
+    <label>Текст запроса</label>
+    <input id="tagAllText" placeholder="Please share your load list" />
+
+    <div class="row" style="margin-top:10px;">
+      <div style="flex:0; min-width:150px;">
+        <label style="margin:0;">Тегов в сообщении</label>
+        <input id="tagAllBatchSize" type="number" min="1" max="50" step="1" value="5" style="width:90px;" />
+      </div>
+      <div style="flex:0; min-width:170px;">
+        <label style="margin:0;">Задержка между сообщениями</label>
+        <input id="tagAllDelay" type="number" min="2" max="60" step="1" value="3" style="width:90px;" />
+      </div>
+      <div style="flex:0; align-self:flex-end; padding-bottom:10px;"><span class="muted">сек. (мин. 2)</span></div>
+    </div>
+
+    <div class="toolbar" style="margin-top:12px;">
+      <button class="btn-primary" id="tagAllSelectedBtn">Тегнуть всех в выбранных</button>
+      <button class="btn-success" id="tagAllGroupsBtn">Тегнуть всех во всех группах</button>
+    </div>
+    <p class="muted" id="tagAllStatus"></p>
+
     <p class="hint" style="margin-top:20px;">Cap List Puller — сканирует переписку в ваших группах за последний 1–3 часа и находит уже написанные там сообщения вида «Las Vegas NV Solo» / «CA Team», не отправляя ничего в группу.</p>
     <div class="toolbar">
       <button class="btn-secondary autopull-btn" data-hours="1">Pull 1 hr</button>
