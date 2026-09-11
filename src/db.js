@@ -138,9 +138,35 @@ CREATE TABLE IF NOT EXISTS tag_all_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_tag_all_jobs_user ON tag_all_jobs(user_id);
 
+-- People who should never be @-mentioned by "tag all" (dispatchers who asked
+-- to be left alone, other admins, etc.). Stored as one editable list per user.
+CREATE TABLE IF NOT EXISTS tag_all_settings (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  excluded_usernames TEXT NOT NULL DEFAULT ''
+);
+
 -- Cap List Puller: records the last time a user scanned their groups'
 -- message HISTORY (looking backward, not forward) for cap-list lines, so the
 -- UI can show "last pulled: N hours, at HH:MM, found X".
+-- A Cap List Puller run. Scanning several groups' history takes far longer
+-- than an HTTP request should stay open (that was surfacing as 504s), so the
+-- scan runs in the background and the client polls this for progress.
+CREATE TABLE IF NOT EXISTS cap_list_pull_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  hours INTEGER NOT NULL,
+  total_groups INTEGER NOT NULL,
+  completed_groups INTEGER NOT NULL DEFAULT 0,
+  found_count INTEGER NOT NULL DEFAULT 0,
+  scanned_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'running',
+  error TEXT,
+  details TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cap_list_pull_jobs_user ON cap_list_pull_jobs(user_id);
+
 CREATE TABLE IF NOT EXISTS cap_list_pull_log (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   last_hours INTEGER NOT NULL,
@@ -194,6 +220,10 @@ ensureColumn('brokers', 'notes', 'TEXT');
 // live listener already captured, or on a re-pull of an overlapping window.
 ensureColumn('cap_list_entries', 'tg_message_id', 'INTEGER');
 db.exec('CREATE INDEX IF NOT EXISTS idx_cap_list_group_msg ON cap_list_entries(group_id, tg_message_id)');
+
+// Groups that "tag all" must never mention anyone in (announcement channels
+// and the like). They stay fully usable for ordinary cap list requests.
+ensureColumn('telegram_groups', 'no_tag', 'INTEGER NOT NULL DEFAULT 0');
 
 // One-time copy of any legacy single-mailbox rows into the new multi-mailbox
 // table, so users who connected mail before this update don't lose it.

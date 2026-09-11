@@ -501,9 +501,34 @@ function renderCapListGroups() {
 
   for (const g of groups) {
     const label = document.createElement('label');
-    label.innerHTML = `<input type="checkbox" class="caplist-group-checkbox" value="${g.id}" /><span>${escapeHtml(g.title || '(без названия)')}</span>`;
+    label.innerHTML = `
+      <input type="checkbox" class="caplist-group-checkbox" value="${g.id}" />
+      <span>${escapeHtml(g.title || '(без названия)')}</span>
+      <span class="group-notag-toggle" style="margin-left:auto; display:flex; align-items:center; gap:6px;">
+        <input type="checkbox" class="caplist-group-notag" data-id="${g.id}" ${g.no_tag ? 'checked' : ''} />
+        <span class="muted" style="font-size:12px;">не тегать</span>
+      </span>
+    `;
     listEl.appendChild(label);
   }
+
+  listEl.querySelectorAll('.caplist-group-notag').forEach((cb) => {
+    cb.addEventListener('change', async (e) => {
+      // Keep the row's own selection checkbox from toggling when this is clicked.
+      e.stopPropagation();
+      try {
+        await api(`/api/telegram/groups/${cb.dataset.id}/notag`, {
+          method: 'POST',
+          body: JSON.stringify({ noTag: cb.checked }),
+        });
+        const group = groups.find((g) => g.id === Number(cb.dataset.id));
+        if (group) group.no_tag = cb.checked ? 1 : 0;
+      } catch (err) {
+        cb.checked = !cb.checked;
+        flash(document.getElementById('capListRequestError'), err.message, true);
+      }
+    });
+  });
 }
 
 document.getElementById('capListSelectAllBtn').addEventListener('click', () => {
@@ -546,6 +571,34 @@ document.getElementById('capListRequestAllBtn').addEventListener('click', () => 
 // the server runs it as a background job and we poll for progress here.
 
 let tagAllPollTimer = null;
+let tagAllExcludedSaveTimer = null;
+
+async function loadTagAllSettings() {
+  try {
+    const { excludedUsernames } = await api('/api/telegram/caplist/tagall/settings');
+    document.getElementById('tagAllExcluded').value = excludedUsernames || '';
+  } catch {
+    // leave the field as-is; the server-side list is what actually applies
+  }
+}
+
+// Auto-saves like the broker fields — no separate save button.
+document.getElementById('tagAllExcluded').addEventListener('input', () => {
+  clearTimeout(tagAllExcludedSaveTimer);
+  const statusEl = document.getElementById('tagAllExcludedStatus');
+  statusEl.textContent = '';
+  tagAllExcludedSaveTimer = setTimeout(async () => {
+    try {
+      await api('/api/telegram/caplist/tagall/settings', {
+        method: 'POST',
+        body: JSON.stringify({ excludedUsernames: document.getElementById('tagAllExcluded').value }),
+      });
+      statusEl.textContent = 'Сохранено ✓';
+    } catch (err) {
+      statusEl.textContent = `Не сохранено: ${err.message}`;
+    }
+  }, 600);
+});
 
 function stopTagAllPolling() {
   clearTimeout(tagAllPollTimer);
@@ -576,7 +629,10 @@ async function pollTagAllJob(jobId) {
     stopTagAllPolling();
     setTagAllButtonsDisabled(false);
     const failed = (job.details || []).filter((d) => !d.ok);
-    statusEl.textContent = `Готово: отмечено ${job.taggedCount} участник(ов) в ${job.totalGroups} групп(е), сообщений отправлено: ${job.messagesSent}.`;
+    const skipped = (job.details || []).filter((d) => d.skipped);
+    statusEl.textContent =
+      `Готово: отмечено ${job.taggedCount} участник(ов) в ${job.totalGroups} групп(е), сообщений отправлено: ${job.messagesSent}.` +
+      (skipped.length ? ` Пропущено («не тегать»): ${skipped.map((s) => s.title).join(', ')}.` : '');
     if (job.error) {
       flash(errEl, `Не удалось: ${job.error}`, true);
     } else if (failed.length) {
@@ -719,24 +775,68 @@ async function refreshPullStatus() {
   }
 }
 
+// The scan runs in the background on the server (walking several groups'
+// history is far too slow to hold one request open — that was the 504), so we
+// kick it off and poll for progress.
+let capPullPollTimer = null;
+
+function setPullButtonsDisabled(disabled) {
+  document.querySelectorAll('.autopull-btn').forEach((b) => (b.disabled = disabled));
+}
+
+async function pollCapPullJob(jobId) {
+  const statusEl = document.getElementById('autopullStatus');
+  const errEl = document.getElementById('capListRequestError');
+  const okEl = document.getElementById('capListRequestSuccess');
+
+  let job;
+  try {
+    job = await api(`/api/telegram/caplist/pull/job/${jobId}`);
+  } catch (err) {
+    clearTimeout(capPullPollTimer);
+    setPullButtonsDisabled(false);
+    flash(errEl, err.message, true);
+    return;
+  }
+
+  if (job.status === 'done') {
+    clearTimeout(capPullPollTimer);
+    setPullButtonsDisabled(false);
+    const failed = (job.details || []).filter((d) => !d.ok);
+    if (job.error) {
+      flash(errEl, `Пул прерван: ${job.error}`, true);
+    } else if (failed.length) {
+      flash(errEl, `С ошибками: ${failed.map((f) => `${f.title}: ${f.error}`).join('; ')}`, true);
+    } else {
+      flash(okEl, `Просканировано за последние ${job.hours} ч., найдено новых записей: ${job.foundCount}.`);
+    }
+    await refreshPullStatus();
+    await loadCapList();
+    return;
+  }
+
+  statusEl.textContent = `Сканирую: группа ${job.completedGroups} из ${job.totalGroups}, просмотрено сообщений ${job.scannedCount}, найдено ${job.foundCount}…`;
+  capPullPollTimer = setTimeout(() => pollCapPullJob(jobId), 1500);
+}
+
 document.querySelectorAll('.autopull-btn').forEach((btn) => {
   btn.addEventListener('click', async () => {
     const errEl = document.getElementById('capListRequestError');
     const okEl = document.getElementById('capListRequestSuccess');
+    const statusEl = document.getElementById('autopullStatus');
     hide(errEl); hide(okEl);
-    btn.disabled = true;
+    clearTimeout(capPullPollTimer);
+    setPullButtonsDisabled(true);
     try {
-      const result = await api('/api/telegram/caplist/pull', {
+      const { jobId, hours, totalGroups } = await api('/api/telegram/caplist/pull', {
         method: 'POST',
         body: JSON.stringify({ hours: Number(btn.dataset.hours) }),
       });
-      flash(okEl, `Просканировано за последние ${result.hours} ч., найдено новых записей: ${result.totalFound}.`);
-      await refreshPullStatus();
-      await loadCapList();
+      statusEl.textContent = `Сканирую последние ${hours} ч. в ${totalGroups} групп(ах)…`;
+      capPullPollTimer = setTimeout(() => pollCapPullJob(jobId), 1000);
     } catch (err) {
+      setPullButtonsDisabled(false);
       flash(errEl, err.message, true);
-    } finally {
-      btn.disabled = false;
     }
   });
 });
@@ -946,7 +1046,11 @@ function pctClass(pct) {
 }
 
 function brokerDisplayName(b) {
-  return b.lastName ? `${b.lastName}, ${b.firstName}` : b.firstName;
+  // Names are free-form now: "Last, First" still renders that way, anything
+  // else is shown exactly as typed, and an email-only broker falls back to
+  // its address so the row is never blank.
+  if (b.lastName && b.firstName) return `${b.lastName}, ${b.firstName}`;
+  return b.firstName || b.lastName || b.email;
 }
 
 function brokerMatchesFilters(b) {
@@ -1240,9 +1344,11 @@ async function saveBrokerAuto() {
   const statusEl = document.getElementById('brokerModalSaveStatus');
   hide(errEl);
   const payload = collectBrokerPayload();
-  if (!payload.firstName || !payload.email) {
-    // Not enough to save yet (new broker with no name/email typed in) — quietly wait.
-    statusEl.textContent = '';
+  // Email is the only required field — the name can be anything (or nothing).
+  // We wait for a complete-looking address so half-typed ones don't create a
+  // record mid-keystroke.
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+    statusEl.textContent = payload.email ? 'Ждём корректный email…' : '';
     return;
   }
 
@@ -1488,5 +1594,6 @@ document.getElementById('addUserBtn').addEventListener('click', async () => {
     loadCapList(),
     refreshPullStatus(),
     refreshCapListSentMessages(),
+    loadTagAllSettings(),
   ]);
 })();

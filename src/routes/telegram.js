@@ -132,6 +132,26 @@ router.post('/caplist/tagall', (req, res) => {
   }
 });
 
+router.get('/caplist/tagall/settings', (req, res) => {
+  res.json(tg.getTagAllSettings(req.session.userId));
+});
+
+router.post('/caplist/tagall/settings', (req, res) => {
+  try {
+    res.json(tg.setTagAllSettings(req.session.userId, (req.body || {}).excludedUsernames));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/groups/:id/notag', (req, res) => {
+  try {
+    res.json(tg.setGroupNoTag(req.session.userId, Number(req.params.id), !!(req.body || {}).noTag));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 router.get('/caplist/tagall/status/:jobId', (req, res) => {
   const job = tg.getTagAllJob(req.session.userId, Number(req.params.jobId));
   if (!job) return res.status(404).json({ error: 'Задача не найдена.' });
@@ -148,16 +168,22 @@ router.get('/caplist/pull/status', (req, res) => {
 });
 
 // Scans message HISTORY for the past 1-3 hours (looking backward at what's
-// already been posted) and fills the cap list table — it never sends
-// anything to the group.
-router.post('/caplist/pull', async (req, res) => {
+// already been posted) and fills the cap list table — it never sends anything
+// to the group. Starts in the background and returns immediately; poll
+// /caplist/pull/job/:jobId for progress.
+router.post('/caplist/pull', (req, res) => {
   try {
     const { hours } = req.body || {};
-    const result = await tg.pullCapListHistory(req.session.userId, hours);
-    res.json(result);
+    res.json(tg.startCapListPullJob(req.session.userId, hours));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
+});
+
+router.get('/caplist/pull/job/:jobId', (req, res) => {
+  const job = tg.getCapListPullJob(req.session.userId, Number(req.params.jobId));
+  if (!job) return res.status(404).json({ error: 'Задача не найдена.' });
+  res.json(job);
 });
 
 router.post('/send', async (req, res) => {

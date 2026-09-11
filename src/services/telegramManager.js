@@ -636,95 +636,168 @@ function getLastPull(userId) {
   return db.prepare('SELECT * FROM cap_list_pull_log WHERE user_id = ?').get(userId) || null;
 }
 
-async function pullCapListHistory(userId, hours) {
+// Hard stop per group, so one very busy channel can't make a pull run forever.
+const MAX_SCANNED_MESSAGES_PER_GROUP = 3000;
+
+function serializeCapListPullJob(row) {
+  if (!row) return null;
+  let details = [];
+  try {
+    details = row.details ? JSON.parse(row.details) : [];
+  } catch {
+    details = [];
+  }
+  return {
+    id: row.id,
+    hours: row.hours,
+    totalGroups: row.total_groups,
+    completedGroups: row.completed_groups,
+    foundCount: row.found_count,
+    scannedCount: row.scanned_count,
+    status: row.status,
+    error: row.error,
+    details,
+    createdAt: row.created_at,
+    finishedAt: row.finished_at,
+  };
+}
+
+function getCapListPullJob(userId, jobId) {
+  return serializeCapListPullJob(
+    db.prepare('SELECT * FROM cap_list_pull_jobs WHERE id = ? AND user_id = ?').get(jobId, userId)
+  );
+}
+
+// Scans one group's history back to the cutoff. Uses iterMessages rather than
+// getMessages(limit: N) so it stops requesting pages the moment it walks past
+// the time window — a 1-hour pull on a quiet group then costs a single
+// request instead of paging through a fixed thousand messages.
+async function scanGroupHistory(client, userId, group, cutoffSec) {
+  const insert = db.prepare(
+    `INSERT INTO cap_list_entries (user_id, group_id, chat_title, sender_name, raw_text, city, state, truck_type, tg_message_id, created_at)
+     VALUES (@userId, @groupId, @chatTitle, @senderName, @rawText, @city, @state, @truckType, @tgMessageId, @createdAt)`
+  );
+  const dupeCheck = db.prepare(
+    'SELECT 1 FROM cap_list_entries WHERE group_id = ? AND tg_message_id = ? LIMIT 1'
+  );
+
+  const peer = buildInputPeer(group);
+  let found = 0;
+  let scanned = 0;
+
+  for await (const message of client.iterMessages(peer, { limit: MAX_SCANNED_MESSAGES_PER_GROUP })) {
+    if (!message) continue;
+    scanned++;
+    // Newest-first: the first message older than the cutoff means everything
+    // beyond it is older too, so stop before fetching another page.
+    if (message.date && message.date < cutoffSec) break;
+    if (!message.message) continue;
+
+    const matches = message.message.split(/\r?\n/).map(parseCapListLine).filter(Boolean);
+    if (!matches.length) continue;
+
+    // Skip messages already captured (by the live listener, or a previous
+    // overlapping pull) so re-pulling doesn't duplicate rows.
+    if (dupeCheck.get(group.id, message.id)) continue;
+
+    let senderName = '';
+    try {
+      const sender = await message.getSender();
+      if (sender) {
+        senderName =
+          [sender.firstName, sender.lastName].filter(Boolean).join(' ') ||
+          (sender.username ? '@' + sender.username : '');
+      }
+    } catch {
+      // best-effort only
+    }
+
+    const createdAt = new Date(message.date * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    for (const match of matches) {
+      insert.run({
+        userId,
+        groupId: group.id,
+        chatTitle: group.title,
+        senderName,
+        rawText: message.message,
+        city: match.city,
+        state: match.state,
+        truckType: match.truckType,
+        tgMessageId: message.id,
+        createdAt,
+      });
+      found++;
+    }
+  }
+
+  return { found, scanned };
+}
+
+// Validates fast, then scans in the background: walking several groups'
+// history is far too slow to hold an HTTP request open for (that was the 504).
+function startCapListPullJob(userId, hours) {
   const h = Number(hours);
   if (![1, 2, 3].includes(h)) {
     throw new Error('Выберите 1, 2 или 3 часа.');
   }
 
-  const client = await getClient(userId);
   const groups = listGroups(userId);
   if (!groups.length) {
     throw new Error('Сначала добавьте хотя бы одну группу.');
   }
 
+  const jobInfo = db
+    .prepare('INSERT INTO cap_list_pull_jobs (user_id, hours, total_groups, status, details) VALUES (?, ?, ?, ?, ?)')
+    .run(userId, h, groups.length, 'running', '[]');
+  const jobId = jobInfo.lastInsertRowid;
+
+  const progressStmt = db.prepare(
+    `UPDATE cap_list_pull_jobs SET completed_groups = completed_groups + 1,
+       found_count = found_count + ?, scanned_count = scanned_count + ?, details = ?
+     WHERE id = ?`
+  );
+  const finishStmt = db.prepare(
+    "UPDATE cap_list_pull_jobs SET status = 'done', finished_at = datetime('now') WHERE id = ?"
+  );
+  const failStmt = db.prepare(
+    "UPDATE cap_list_pull_jobs SET status = 'done', error = ?, finished_at = datetime('now') WHERE id = ?"
+  );
+
   const cutoffSec = Math.floor(Date.now() / 1000) - h * 60 * 60;
-  const perGroup = [];
-  let totalFound = 0;
 
-  for (const group of groups) {
-    let foundInGroup = 0;
+  (async () => {
+    const details = [];
+    let totalFound = 0;
     try {
-      const peer = buildInputPeer(group);
-      // Messages come back newest-first; a generous limit covers a busy
-      // freight channel over a 1-3 hour window without paging.
-      const messages = await client.getMessages(peer, { limit: 1000 });
+      const client = await getClient(userId);
 
-      for (const message of messages) {
-        if (!message || !message.message) continue;
-        if (message.date < cutoffSec) break; // older than our window — done with this group
-
-        const lines = message.message.split(/\r?\n/);
-        const matches = lines.map(parseCapListLine).filter(Boolean);
-        if (!matches.length) continue;
-
-        // Skip messages already captured (by the live listener, or a
-        // previous overlapping pull) so re-pulling doesn't duplicate rows.
-        const already = db
-          .prepare('SELECT 1 FROM cap_list_entries WHERE group_id = ? AND tg_message_id = ? LIMIT 1')
-          .get(group.id, message.id);
-        if (already) continue;
-
-        let senderName = '';
+      for (const group of groups) {
         try {
-          const sender = await message.getSender();
-          if (sender) {
-            senderName =
-              [sender.firstName, sender.lastName].filter(Boolean).join(' ') ||
-              (sender.username ? '@' + sender.username : '');
-          }
-        } catch {
-          // best-effort only
-        }
-
-        const createdAt = new Date(message.date * 1000).toISOString().slice(0, 19).replace('T', ' ');
-        const insert = db.prepare(
-          `INSERT INTO cap_list_entries (user_id, group_id, chat_title, sender_name, raw_text, city, state, truck_type, tg_message_id, created_at)
-           VALUES (@userId, @groupId, @chatTitle, @senderName, @rawText, @city, @state, @truckType, @tgMessageId, @createdAt)`
-        );
-        for (const match of matches) {
-          insert.run({
-            userId,
-            groupId: group.id,
-            chatTitle: group.title,
-            senderName,
-            rawText: message.message,
-            city: match.city,
-            state: match.state,
-            truckType: match.truckType,
-            tgMessageId: message.id,
-            createdAt,
-          });
-          foundInGroup++;
+          const { found, scanned } = await scanGroupHistory(client, userId, group, cutoffSec);
+          totalFound += found;
+          details.push({ title: group.title, ok: true, found, scanned });
+          progressStmt.run(found, scanned, JSON.stringify(details), jobId);
+        } catch (err) {
+          details.push({ title: group.title, ok: false, found: 0, error: err.message });
+          progressStmt.run(0, 0, JSON.stringify(details), jobId);
         }
       }
-      totalFound += foundInGroup;
-      perGroup.push({ groupId: group.id, title: group.title, found: foundInGroup, ok: true });
+
+      db.prepare(
+        `INSERT INTO cap_list_pull_log (user_id, last_hours, last_pulled_at, last_found_count)
+         VALUES (@userId, @hours, @pulledAt, @totalFound)
+         ON CONFLICT(user_id) DO UPDATE SET
+           last_hours = excluded.last_hours, last_pulled_at = excluded.last_pulled_at,
+           last_found_count = excluded.last_found_count`
+      ).run({ userId, hours: h, pulledAt: new Date().toISOString(), totalFound });
+
+      finishStmt.run(jobId);
     } catch (err) {
-      perGroup.push({ groupId: group.id, title: group.title, ok: false, error: err.message });
+      failStmt.run(err.message, jobId);
     }
-  }
+  })();
 
-  const pulledAt = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO cap_list_pull_log (user_id, last_hours, last_pulled_at, last_found_count)
-     VALUES (@userId, @hours, @pulledAt, @totalFound)
-     ON CONFLICT(user_id) DO UPDATE SET
-       last_hours = excluded.last_hours, last_pulled_at = excluded.last_pulled_at,
-       last_found_count = excluded.last_found_count`
-  ).run({ userId, hours: h, pulledAt, totalFound });
-
-  return { hours: h, totalFound, groups: perGroup, pulledAt };
+  return { jobId, hours: h, totalGroups: groups.length };
 }
 
 // ---- Tag All: @-mention every member of a group to ask for a load list ----
@@ -737,7 +810,61 @@ const MIN_TAG_DELAY_SECONDS = 2;
 const MAX_TAG_DELAY_SECONDS = 60;
 const MAX_MEMBERS_PER_GROUP = 1000;
 
+// Seeded the first time a user opens the feature; fully editable afterwards
+// (including clearing it out entirely — the stored row is what counts, so an
+// emptied list stays empty and is never re-seeded).
+const DEFAULT_TAG_EXCLUSIONS = [
+  'zamkgz',
+  'benjamin_1207',
+  'LB_Mark',
+  'babazavrrrrr',
+  'Islam_cold_loads',
+  'Eddy_x993',
+  'rashland_force',
+].join('\n');
+
 const tagSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function getTagAllSettings(userId) {
+  let row = db.prepare('SELECT * FROM tag_all_settings WHERE user_id = ?').get(userId);
+  if (!row) {
+    db.prepare('INSERT INTO tag_all_settings (user_id, excluded_usernames) VALUES (?, ?)').run(
+      userId,
+      DEFAULT_TAG_EXCLUSIONS
+    );
+    row = db.prepare('SELECT * FROM tag_all_settings WHERE user_id = ?').get(userId);
+  }
+  return { excludedUsernames: row.excluded_usernames || '' };
+}
+
+function setTagAllSettings(userId, excludedUsernames) {
+  const value = typeof excludedUsernames === 'string' ? excludedUsernames : '';
+  db.prepare(
+    `INSERT INTO tag_all_settings (user_id, excluded_usernames) VALUES (?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET excluded_usernames = excluded.excluded_usernames`
+  ).run(userId, value);
+  return { excludedUsernames: value };
+}
+
+// Accepts handles however they're pasted in: with or without "@", separated by
+// newlines, commas or spaces. Compared lowercased, since Telegram handles are
+// case-insensitive.
+function parseExcludedUsernames(text) {
+  return new Set(
+    String(text || '')
+      .split(/[\s,;]+/)
+      .map((part) => part.trim().replace(/^@+/, '').toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function setGroupNoTag(userId, groupId, noTag) {
+  const info = db
+    .prepare('UPDATE telegram_groups SET no_tag = ? WHERE user_id = ? AND id = ?')
+    .run(noTag ? 1 : 0, userId, groupId);
+  if (info.changes === 0) throw new Error('Группа не найдена.');
+  return { id: groupId, noTag: !!noTag };
+}
 
 function pickUsername(user) {
   if (user.username) return user.username;
@@ -750,7 +877,7 @@ function pickUsername(user) {
   return '';
 }
 
-async function fetchGroupMembers(userId, group) {
+async function fetchGroupMembers(userId, group, excluded = new Set()) {
   const client = await getClient(userId);
   const peer = buildInputPeer(group);
 
@@ -770,10 +897,14 @@ async function fetchGroupMembers(userId, group) {
     if (user.bot || user.deleted) continue; // no point pinging bots or dead accounts
     const id = user.id.toString();
     if (myId && id === myId) continue; // don't tag yourself
+
+    const username = pickUsername(user);
+    if (username && excluded.has(username.toLowerCase())) continue; // on the never-tag list
+
     members.push({
       id,
       accessHash: user.accessHash ? user.accessHash.toString() : null,
-      username: pickUsername(user),
+      username,
       firstName: user.firstName || '',
       lastName: user.lastName || '',
     });
@@ -874,10 +1005,20 @@ function startTagAllJob(userId, groupIds, text, { batchSize, delaySeconds, autoD
     throw new Error('Выберите хотя бы одну группу.');
   }
 
-  const groups = db
+  const selected = db
     .prepare(`SELECT * FROM telegram_groups WHERE user_id = ? AND id IN (${groupIds.map(() => '?').join(',')})`)
     .all(userId, ...groupIds);
-  if (!groups.length) throw new Error('Группы не найдены.');
+  if (!selected.length) throw new Error('Группы не найдены.');
+
+  // Groups flagged "не тегать" are dropped up front, so "тегнуть во всех
+  // группах" never touches them.
+  const skipped = selected.filter((g) => g.no_tag);
+  const groups = selected.filter((g) => !g.no_tag);
+  if (!groups.length) {
+    throw new Error('Все выбранные группы отмечены как «не тегать».');
+  }
+
+  const excluded = parseExcludedUsernames(getTagAllSettings(userId).excludedUsernames);
 
   const size = Math.min(MAX_TAG_BATCH_SIZE, Math.max(1, Number(batchSize) || DEFAULT_TAG_BATCH_SIZE));
   const delayMs =
@@ -907,7 +1048,7 @@ function startTagAllJob(userId, groupIds, text, { batchSize, delaySeconds, autoD
   // Deliberately not awaited — startTagAllJob returns the id immediately and
   // the client polls getTagAllJob() for progress.
   (async () => {
-    const details = [];
+    const details = skipped.map((g) => ({ title: g.title, ok: true, skipped: true, tagged: 0 }));
     try {
       const client = await getClient(userId);
       let firstMessage = true;
@@ -916,9 +1057,14 @@ function startTagAllJob(userId, groupIds, text, { batchSize, delaySeconds, autoD
         let taggedHere = 0;
         let sentHere = 0;
         try {
-          const members = await fetchGroupMembers(userId, group);
+          const members = await fetchGroupMembers(userId, group, excluded);
           if (!members.length) {
-            details.push({ title: group.title, ok: false, tagged: 0, error: 'Не удалось получить участников.' });
+            details.push({
+              title: group.title,
+              ok: false,
+              tagged: 0,
+              error: 'Некого тегать (участники не получены или все в списке исключений).',
+            });
             progressStmt.run(0, 0, JSON.stringify(details), jobId);
             continue;
           }
@@ -975,10 +1121,15 @@ module.exports = {
   capListCounts,
   clearCapList,
   getLastPull,
-  pullCapListHistory,
+  startCapListPullJob,
+  getCapListPullJob,
   parseCapListLine,
   startTagAllJob,
   getTagAllJob,
+  getTagAllSettings,
+  setTagAllSettings,
+  parseExcludedUsernames,
+  setGroupNoTag,
   buildMentionMessage,
   CAP_LIST_REQUEST_TEXT,
   TAG_ALL_DEFAULT_TEXT,

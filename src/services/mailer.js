@@ -205,8 +205,17 @@ function addBroker(
   userId,
   { firstName, lastName, email, workHours, rating, shift, hoursFrom, hoursTo, workingDays, shuttle, birthday, notes }
 ) {
-  if (!firstName || !lastName || !email) {
-    throw new Error('Укажите имя, фамилию и email брокера.');
+  // Email is the only thing we actually need — brokers get saved however the
+  // user writes them down ("Jessica Davis", "Rash AMZN", a nickname, or
+  // nothing at all), so the name is stored verbatim rather than forced into
+  // a last/first shape.
+  if (!email) {
+    throw new Error('Укажите email брокера.');
+  }
+  // The address is the one field that has to be real — a broker with a junk
+  // email is a silently broken row at send time.
+  if (!EMAIL_RE.test(String(email).trim())) {
+    throw new Error('Введите корректный email.');
   }
   const info = db
     .prepare(
@@ -286,8 +295,10 @@ function updateBroker(
      WHERE id = @id`
   ).run({
     id,
-    firstName: firstName || existing.first_name,
-    lastName: lastName || existing.last_name,
+    // Explicit empty strings clear the name — it's free-form text, so the
+    // user is allowed to blank it out.
+    firstName: firstName !== undefined ? firstName : existing.first_name,
+    lastName: lastName !== undefined ? lastName : existing.last_name,
     workHours: workHours !== undefined ? workHours : existing.work_hours,
     email: email || existing.email,
     rating: rating === undefined || rating === null || rating === '' ? existing.rating : Number(rating),
@@ -403,8 +414,10 @@ function importBrokersCsv(userId, csvText) {
   const header = rows[0].map((h) => HEADER_ALIASES[h.trim().toLowerCase()] || null);
   const nameIdx = header.indexOf('name');
   const emailIdx = header.indexOf('email');
-  if (nameIdx === -1 || emailIdx === -1) {
-    throw new Error('В CSV должны быть колонки Name (Имя) и Email.');
+  // Only Email is required — a name column is nice to have but plenty of
+  // broker lists are just addresses.
+  if (emailIdx === -1) {
+    throw new Error('В CSV должна быть колонка Email.');
   }
 
   let imported = 0;
@@ -412,8 +425,8 @@ function importBrokersCsv(userId, csvText) {
   for (let i = 1; i < rows.length; i++) {
     const cols = rows[i];
     const email = (cols[emailIdx] || '').trim();
-    const nameRaw = (cols[nameIdx] || '').trim();
-    if (!email || !nameRaw) continue;
+    const nameRaw = nameIdx === -1 ? '' : (cols[nameIdx] || '').trim();
+    if (!email) continue;
 
     let lastName = '';
     let firstName = nameRaw;
@@ -430,7 +443,7 @@ function importBrokersCsv(userId, csvText) {
 
     try {
       addBroker(userId, {
-        firstName: firstName || nameRaw,
+        firstName,
         lastName,
         email,
         shift: get('shift') ? get('shift').toLowerCase() : undefined,

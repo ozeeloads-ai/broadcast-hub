@@ -406,7 +406,7 @@
     <h2 id="brokerModalTitle">Добавить брокера</h2>
 
     <label>Имя</label>
-    <input id="brokerName" placeholder="Фамилия, Имя" />
+    <input id="brokerName" placeholder="Любой текст: Jessica Davis, Rash AMZN, кличка… (необязательно)" />
 
     <label>Email</label>
     <input id="brokerEmailInput" placeholder="broker@company.com" />
@@ -493,6 +493,10 @@
 
     <label>Текст запроса</label>
     <input id="tagAllText" placeholder="Please share your load list" />
+
+    <label>Не тегать этих участников</label>
+    <textarea id="tagAllExcluded" rows="3" placeholder="@username по одному в строке (или через запятую)"></textarea>
+    <p class="muted" id="tagAllExcludedStatus"></p>
 
     <div class="row" style="margin-top:10px;">
       <div style="flex:0; min-width:150px;">
